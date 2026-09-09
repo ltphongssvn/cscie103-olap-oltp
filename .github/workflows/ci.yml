@@ -25,9 +25,11 @@ concurrency:
 
 jobs:
   check:
-    # NAMED because this string is what GitHub shows when selecting required
-    # status checks for branch protection. An unnamed job appears as a bare key,
-    # which is a poor thing to pick from a list when the choice gates merges.
+    # NAMED, AND THE NAME IS LOAD-BEARING. GitHub matches required status checks
+    # by this exact string, and contracts/ruleset-develop-and-main.json requires
+    # "quality gate". Renaming this job without renaming the required check
+    # leaves a requirement that can never be satisfied, and GitHub does not warn
+    # about it -- tests/test_ruleset.py compares the two for that reason.
     name: quality gate
     runs-on: ubuntu-latest
     steps:
@@ -36,6 +38,7 @@ jobs:
       # behind that tag today. The comment carries the version so the pin stays
       # readable; the SHA is what executes. Update deliberately via `zizmor
       # --fix` or by re-resolving the tag, never by editing the comment.
+      # policies/repo/repo.rego R006 enforces the SHA form.
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with:
           # FULL HISTORY IS REQUIRED, NOT A PREFERENCE. The default is a shallow
@@ -86,11 +89,28 @@ jobs:
         with:
           install: false
 
-      # ONE COMMAND. ci.yml deliberately restates NOTHING about what is checked.
+      # ONE COMMAND. ci.yml deliberately restates NOTHING about what `check`
+      # contains.
       #
       # Listing lint, types and test as separate steps would be a second copy of
-      # that list, which drifts the moment a gate is added to mise.toml and
-      # forgotten here. Adding a gate to `check` extends local runs, the git
-      # hooks, and this workflow at once.
+      # a list that lives in mise.toml, and it drifts the moment a gate is added
+      # to one and forgotten in the other. R008 enforces that absence.
       - name: mise run check
         run: mise run check
+
+      # A SEPARATE STEP, NOT PART OF `check`, AND THAT IS THE DESIGN.
+      #
+      # It needs network and gh auth. A local commit cannot weaken a server-side
+      # ruleset, so making every commit depend on both would block offline work
+      # for no benefit -- and a gate that fails on a plane is one people bypass.
+      #
+      # NOT A SCHEDULED WORKFLOW either: GitHub disables those after 60 days of
+      # repository inactivity, and a security check that silently stops is worse
+      # than none. Tying it to CI removes the cron dependency.
+      #
+      # RUNS AFTER `check` because if the code is broken, the protection status
+      # is the less urgent of the two findings.
+      - name: mise run check:ruleset
+        run: mise run check:ruleset
+        env:
+          GH_TOKEN: ${{ github.token }}

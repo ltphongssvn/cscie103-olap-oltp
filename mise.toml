@@ -156,6 +156,10 @@ description = "The quality gate. CI runs exactly this task; nothing is restated 
 #
 # POLICY IS PART OF THE GATE, NOT AN OPTIONAL EXTRA. Repository behaviour that
 # is enforced only when someone remembers to run the checker is not enforced.
+#
+# check:ruleset IS NOT HERE, AND THAT IS DELIBERATE. It needs network and gh
+# auth, and a local commit cannot weaken a server-side ruleset. Coupling every
+# commit to both would block offline work for no benefit; CI runs it separately.
 run = '''
 set -euo pipefail
 mise run lint
@@ -214,6 +218,63 @@ else
 fi
 '''
 
+# --- Repository configuration -------------------------------------------------
+
+[tasks."repo:configure"]
+description = "Apply repository settings and branch ruleset (idempotent)"
+# REPOSITORY SETTINGS ARE INFRASTRUCTURE. Clicked in a web UI they are invisible
+# to the repo, unreviewable and unreproducible -- and this repository shipped
+# its first pull request with NO protection and NO required check, which is the
+# failure that motivated writing this down.
+#
+# TWO HALVES, AND THE SECOND MAKES THE FIRST MEAN ANYTHING:
+#   settings  allow auto-merge, merge commits only, delete branch on merge
+#   ruleset   protect develop and main, and REQUIRE the quality gate
+#
+# Without a REQUIRED status check, auto-merge has nothing to wait for and fires
+# immediately -- worse than no auto-merge, because it looks like a gate.
+#
+# MERGE COMMITS ONLY: GitFlow depends on merge topology, and squashing would
+# collapse commits whose reasoning is the most valuable thing in this history.
+#
+# required_approving_review_count IS 0 because this is a solo repository.
+# Requiring a review nobody can give would block every merge; the gate is CI.
+#
+# THE RULESET IS A COMMITTED CONTRACT, NOT AN INLINE PAYLOAD. Keeping it in
+# contracts/ makes a change to branch protection a reviewable diff.
+run = '''
+set -euo pipefail
+
+gh api -X PATCH "repos/{owner}/{repo}" \
+  -F allow_auto_merge=true \
+  -F allow_merge_commit=true \
+  -F allow_squash_merge=false \
+  -F allow_rebase_merge=false \
+  -F delete_branch_on_merge=true \
+  > /dev/null
+echo "settings applied"
+
+name="develop-and-main-protection"
+existing="$(gh api "repos/{owner}/{repo}/rulesets" --jq \
+  ".[] | select(.name == \"$name\") | .id" || true)"
+
+if [ -n "$existing" ]; then
+  gh api -X PUT "repos/{owner}/{repo}/rulesets/$existing" \
+    --input contracts/ruleset-develop-and-main.json > /dev/null
+  echo "ruleset updated (id $existing)"
+else
+  gh api -X POST "repos/{owner}/{repo}/rulesets" \
+    --input contracts/ruleset-develop-and-main.json > /dev/null
+  echo "ruleset created"
+fi
+
+echo "--- readback ---"
+gh api "repos/{owner}/{repo}" \
+  --jq '{auto_merge:.allow_auto_merge, merge_commit:.allow_merge_commit, squash:.allow_squash_merge, rebase:.allow_rebase_merge, delete_on_merge:.delete_branch_on_merge}'
+gh api "repos/{owner}/{repo}/rulesets" \
+  --jq '.[] | {id, name, enforcement}'
+'''
+
 # --- Workflow -----------------------------------------------------------------
 # EVERY PROJECT OPERATION IS A TASK. A one-off CLI invocation is behavior that
 # exists only in one person's shell history: untested, undiscoverable,
@@ -258,3 +319,42 @@ case "$branch" in
 esac
 echo "on $branch (not protected)"
 '''
+
+[tasks."start:here"]
+description = "Cut a feature branch from origin/develop in THIS shell"
+# PRINTS the command instead of pretending to run it, because a mise task runs
+# in a subshell and cannot change the invoking shell's branch:
+#
+#   eval "$(mise run start:here <slug>)"
+#
+# The sibling project shipped a `start` task that ran `git switch -c` directly;
+# the switch died with the subshell, the caller stayed on develop, and the task
+# printed "on feature/x" and reported success.
+#
+# Uncommitted work carries across automatically: `git switch -c` keeps the
+# working tree, so a modified file on develop lands on the new branch.
+usage = '''
+arg "<slug>" help="Short kebab-case description, e.g. oltp-contracts"
+'''
+run = '''
+set -euo pipefail
+slug="$usage_slug"
+
+case "$slug" in
+  *[!a-z0-9-]*|"")
+    echo "echo 'slug must be lowercase kebab-case: $slug' >&2; false" ;;
+  *)
+    echo "git fetch origin --prune --quiet && git switch -c feature/$slug origin/develop" ;;
+esac
+'''
+
+[tasks."check:ruleset"]
+description = "Verify develop and main are actually protected on the server"
+# CHECKS THE RULESET'S CONTENTS, NOT ITS EXISTENCE. One edited to require
+# nothing is the failure mode that looks like success -- and this repository
+# opened its first pull request in exactly that state.
+#
+# NOT A DEPENDENCY OF `check`. It needs network and gh auth, and a local commit
+# cannot weaken a server-side ruleset, so coupling every commit to both would
+# block offline work for no benefit. CI runs it as its own step.
+run = "uv run python -m cscie103_olap_oltp.policy.check_ruleset"

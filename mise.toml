@@ -22,13 +22,6 @@
 # govern mise's TOOL INSTALLATION. With no tools to install they enforce
 # nothing, and a setting that enforces nothing is a claim of coverage this
 # repository does not make. flake.lock is the lockfile.
-#
-# NO [env] BLOCK SETTING DATABRICKS_HOST, AND THAT ABSENCE IS DELIBERATE.
-# The CLI resolves credentials in order -- environment variables, then the
-# .databrickscfg DEFAULT profile -- and stops at the first success. A bare
-# DATABRICKS_HOST names a workspace without supplying any way to prove identity,
-# so resolution halts and never reaches the profile holding the OAuth session.
-# The environment supplies a COMPLETE answer or none at all.
 
 # --- Task interpreter ---------------------------------------------------------
 [task_config]
@@ -170,9 +163,6 @@ description = "The quality gate. CI runs exactly this task; nothing is restated 
 # reports failure as soon as one fails, so a slower gate can never report at
 # all. A gate whose result is never printed is indistinguishable from one that
 # passed. Serial and slower, deliberately.
-#
-# POLICY IS PART OF THE GATE, NOT AN OPTIONAL EXTRA. Repository behaviour that
-# is enforced only when someone remembers to run the checker is not enforced.
 run = '''
 set -euo pipefail
 mise run lint
@@ -240,18 +230,12 @@ description = "Apply repository settings and branch ruleset (idempotent)"
 # its first pull request with NO protection and NO required check, which is the
 # failure that motivated writing this down.
 #
-# TWO HALVES, AND THE SECOND MAKES THE FIRST MEAN ANYTHING:
-#   settings  allow auto-merge, merge commits only, delete branch on merge
-#   ruleset   protect develop and main, and REQUIRE the quality gate
-#
 # MERGE COMMITS ONLY: GitFlow depends on merge topology, and squashing would
 # collapse commits whose reasoning is the most valuable thing in this history.
 #
-# required_approving_review_count IS 0 because this is a solo repository.
-# Requiring a review nobody can give would block every merge; the gate is CI.
-#
 # THE RULESET IS A COMMITTED CONTRACT, NOT AN INLINE PAYLOAD. Keeping it in
-# contracts/ makes a change to branch protection a reviewable diff.
+# contracts/ makes a change to branch protection a reviewable diff, and
+# check:ruleset verifies the server still matches it.
 run = '''
 set -euo pipefail
 
@@ -295,8 +279,7 @@ description = "Open a PR and block until it is merged"
 #
 # Three phases, because waiting for checks to APPEAR and waiting for them to
 # FINISH are different problems, and the rollup lags both. Each is bounded: an
-# unbounded wait hangs when something upstream never resolves, teaching the
-# person nothing.
+# unbounded wait hangs when something upstream never resolves.
 run = "uv run python -m cscie103_olap_oltp.git.pr"
 
 [tasks."pr-status"]
@@ -304,6 +287,18 @@ description = "Show merge state and checks for the current branch's PR"
 # A READ OPERATION IS A PROJECT OPERATION TOO. `gh pr view` typed by hand is
 # still a throw-away CLI: the next person guesses which fields matter.
 run = "gh pr view --json number,title,mergeable,mergeStateStatus,statusCheckRollup --jq '{pr:.number,title,mergeable,state:.mergeStateStatus,checks:[.statusCheckRollup[]|{name,conclusion}]}'"
+
+[tasks.sync]
+description = "Return to develop, pull, and remove branches that are safe to remove"
+# STATE-DRIVEN, NOT A PIPELINE. Piping `git for-each-ref` through awk and
+# deleting whatever reports [gone] works until a worktree holds one of those
+# branches: git refuses -- correctly -- and the task ABORTS after the pull has
+# already succeeded, leaving the sync half done.
+#
+# The plan is computed before anything is deleted, and every branch that cannot
+# be removed is reported WITH THE REASON. A cleanup that quietly leaves
+# something behind is the failure signal for this whole class of bug.
+run = "uv run python -m cscie103_olap_oltp.git.sync"
 
 [tasks.status]
 description = "Show branch, working tree, and how it relates to develop"

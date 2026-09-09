@@ -9,6 +9,9 @@
 # script to bridge the gap. This repo starts without the duplication rather than
 # adding a gate to police it.
 #
+# policies/repo/repo.rego R001 ENFORCES THAT ABSENCE, so the reasoning above
+# cannot quietly stop being true.
+#
 # THERE IS ALSO NO [settings] BLOCK. `lockfile = true` and `install_before`
 # govern mise's TOOL INSTALLATION. With no tools to install they enforce
 # nothing, and a setting that enforces nothing is a claim of coverage this
@@ -31,7 +34,7 @@
 # body, every hook job and the CI workflow, each depending on someone
 # remembering. One forgotten call site is a task that works for whoever happens
 # to be inside a shell already and fails for everyone else. One boundary,
-# declared once.
+# declared once. R002 enforces it.
 #
 # THE SHELL IS ALSO PINNED. mise defaults to `sh`, which is bash-in-POSIX-mode
 # on macOS and dash on the Ubuntu runner: same task body, different interpreter,
@@ -41,6 +44,7 @@
 # WITH `set -euo pipefail`. mise's own default includes errexit and pipefail;
 # overriding the shell discards them. A multi-command task without it reports
 # the exit code of its LAST command, so an earlier failure passes silently.
+# R004 enforces it.
 shell = "nix develop --command bash -c"
 
 # --- Nix ----------------------------------------------------------------------
@@ -57,14 +61,15 @@ description = "Evaluate the flake on every supported platform"
 #
 # --no-build evaluates derivations without realising them: seconds rather than a
 # toolchain download. IT PROVES NAMES RESOLVE, NOT THAT THEY BUILD. The unfree
-# licence on databricks-cli is checked at REALISATION, so it can pass three
-# green platforms here and fail on the first real `nix develop`.
+# licence on databricks-cli is checked at REALISATION, so it passed three green
+# platforms here and would have failed on the first real `nix develop`.
 run = "nix flake check --no-build --all-systems"
 
 # --- Gates --------------------------------------------------------------------
 #
 # EVERY TASK RUNS PYTHON THROUGH uv, NEVER BARE python3. A bare interpreter name
 # is PATH resolution, and PATH is ambient state this repo does not control.
+# R003 enforces it.
 
 [tasks.fmt]
 description = "Apply every safe autofix: formatting AND import ordering"
@@ -114,7 +119,8 @@ run = "uv run pytest -m integration"
 [tasks."check:policy"]
 description = "Format, check, lint and unit-test every Rego policy"
 # --fail-on-empty IS NOT OPTIONAL: `opa test` SUCCEEDS when zero tests run, so a
-# renamed package or mistyped path reports green while testing nothing.
+# renamed package or mistyped path reports green while testing nothing. R005
+# enforces that this flag stays.
 run = '''
 set -euo pipefail
 opa fmt --fail --diff policies/
@@ -123,20 +129,40 @@ regal lint policies/
 opa test policies/ --fail-on-empty
 '''
 
+[tasks."check:policy-decisions"]
+description = "Evaluate this repo against its own policies, and record the verdict"
+# THE SPLIT THAT IS KEPT, BECAUSE IT IS A DIFFERENCE IN KIND:
+#   check:policy            are the policies well-formed and tested?
+#   check:policy-decisions  does the CODEBASE satisfy them?
+#
+# A policy suite can be immaculate and enforce nothing. Only evaluating real
+# input proves the repository obeys its own rules.
+#
+# EMITS A DECISION ARTIFACT BEFORE EXITING. A gate that exits non-zero and
+# leaves nothing behind forces the next person to re-run it to find out what
+# happened -- and a re-run observes a different moment.
+run = "uv run python -m cscie103_olap_oltp.policy"
+
 [tasks.check]
 description = "The quality gate. CI runs exactly this task; nothing is restated in ci.yml"
 # SINGLE SOURCE OF TRUTH. A second copy of the gate list in ci.yml drifts the
-# moment a check is added here and forgotten there.
+# moment a check is added here and forgotten there. R008 enforces that ci.yml
+# does not restate these.
 #
 # NOT depends = [...]. mise runs dependencies in PARALLEL with no order and
 # reports failure as soon as one fails, so a slower gate can never report at
 # all. A gate whose result is never printed is indistinguishable from one that
 # passed. Serial and slower, deliberately.
+#
+# POLICY IS PART OF THE GATE, NOT AN OPTIONAL EXTRA. Repository behaviour that
+# is enforced only when someone remembers to run the checker is not enforced.
 run = '''
 set -euo pipefail
 mise run lint
 mise run types
 mise run test
+mise run check:policy
+mise run check:policy-decisions
 '''
 
 # --- Onboarding ---------------------------------------------------------------
@@ -215,7 +241,8 @@ git log --oneline develop..HEAD 2>/dev/null || echo "(on develop)"
 description = "Refuse to work on a protected branch"
 # Wired into the pre-commit hook so the guard fires before a commit lands rather
 # than after. Fails closed, which is what an unattended run needs: it will not
-# notice a warning, but it will notice a non-zero exit.
+# notice a warning, but it will notice a non-zero exit. R011 enforces that the
+# hook keeps calling it.
 run = '''
 set -euo pipefail
 branch="$(git rev-parse --abbrev-ref HEAD)"

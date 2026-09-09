@@ -1,0 +1,37 @@
+# .gitignore
+
+# --- As-data runtime artifacts (evidence/verdicts/decisions) - never committed
+.artifacts/
+*.ndjson
+*.parquet
+
+# --- Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+.venv/
+venv/
+
+# --- Test / type / lint caches
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# --- Databricks
+.databricks/
+databricks.yml.bak
+
+# --- Tooling
+.direnv/
+result
+result-*
+
+# --- OS / editor
+.DS_Store
+.idea/
+.vscode/

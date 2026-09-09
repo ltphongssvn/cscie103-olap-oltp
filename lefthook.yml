@@ -1,0 +1,51 @@
+# lefthook.yml
+# Git hooks, committed so they belong to the repo rather than to one laptop.
+#
+# NO VERSIONS OR BINARY PATHS APPEAR HERE. Everything runs through `mise run`,
+# which enters the Nix devShell via task_config -- so this file cannot drift from
+# the toolchain, and a bare command name never resolves against whatever PATH the
+# shell happens to have at that moment.
+#
+# THE STAGING, AND WHY IT IS NOT "RUN EVERYTHING EVERYWHERE"
+#   pre-commit  fast and offline: branch guard, format, lint. Seconds.
+#   pre-push    medium: types and tests, still offline.
+#   CI          the full gate, including anything needing network or credentials.
+#
+# The hook nobody runs is worse than the slower hook that still catches things.
+# A pre-commit needing Databricks auth fails on a plane, and a hook that fails on
+# a plane is a hook people bypass with --no-verify -- at which point it catches
+# nothing at all. A local commit cannot invalidate server-side state, so nothing
+# is lost by deferring those checks.
+#
+# CI IS DELIBERATELY BROADER THAN THESE HOOKS, NOT A MIRROR OF THEM. A hook only
+# ever sees the incoming change, and --no-verify skips it entirely. CI is the
+# layer where a bypass is caught, which only works if it checks strictly more.
+#
+# SYNTAX: `jobs:`, not `commands:`. `commands:` is lefthook 1.x; the flake
+# supplies 2.1.12.
+
+pre-commit:
+  # NOT parallel. The formatter REWRITES files, so it must finish before any
+  # check reads them. Running both at once is a race whose outcome depends on
+  # which process wins.
+  parallel: false
+  jobs:
+    # BRANCH GUARD FIRST, BEFORE ANY WORK. The server ruleset already rejects a
+    # PUSH to develop or main, but by then the commit exists and has to be
+    # unwound. Catching it here keeps recovery to a single `git switch -c`.
+    - name: branch
+      run: mise run start:check
+
+    - name: format
+      run: mise run fmt
+      # Re-stages what the formatter rewrote, so a commit cannot omit its own
+      # formatting fix.
+      stage_fixed: true
+
+    - name: lint
+      run: mise run lint
+
+pre-push:
+  jobs:
+    - name: gate
+      run: mise run check

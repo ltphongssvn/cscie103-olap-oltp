@@ -1,0 +1,144 @@
+# pyproject.toml
+[project]
+name = "cscie103-olap-oltp"
+version = "0.1.0"
+description = "OLTP (ER/3NF) to OLAP (dimensional) data platform, as code and as data"
+# MUST MATCH .python-version AND THE BUNDLE'S environment_version.
+# Spark Connect requires the client and server to share a Python MINOR version;
+# a mismatch surfaces as "Python versions in the Spark Connect client and server
+# are different" when a UDF dies, not when the change was made.
+requires-python = "==3.12.3"
+
+# CONTRACT-FIRST, AND THESE ARE RUNTIME DEPENDENCIES RATHER THAN DEV TOOLS,
+# because the contracts execute inside the pipeline, not only in the test suite.
+#
+#   pydantic   record-boundary validation. pydantic-core is Rust via pyo3, so
+#              per-record validation at ingestion is cheap. It validates ONE
+#              OBJECT AT A TIME and is not designed for table-scale checks --
+#              which is why pandera is here too rather than instead.
+#   pandera    DataFrame/table-boundary validation. One schema definition
+#              validates across pandas and PySpark, so the same contract guards
+#              a local unit test and a Spark job.
+#
+# THE TWO ARE NOT REDUNDANT. They guard different boundaries: pydantic answers
+# "is this record well-formed", pandera answers "does this table satisfy its
+# grain, nullability and statistical expectations".
+dependencies = [
+  "pydantic>=2.10",
+  "pandera>=0.32",
+]
+
+[dependency-groups]
+dev = [
+  "mypy>=1.14",
+  "pytest>=8.3",
+  "ruff>=0.9",
+  # AMBIENT PROCESS STATE, MADE A VALIDATED SNAPSHOT. Environment variables
+  # decide which workspace a command reaches and whether a deploy runs at all.
+  # Reading os.environ where it happens to be needed puts that boundary nowhere.
+  # SecretStr also renders as ********** when printed, which is a stronger
+  # guarantee than remembering not to print a credential.
+  "pydantic-settings>=2.6",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+# SRC LAYOUT, DECLARED. Tests import the INSTALLED package, so a test exercises
+# what ships rather than what happens to be on sys.path. The sibling project
+# records `pythonpath = ["scripts"]` as known debt for exactly this reason; this
+# repo starts with the layout the 2026 guidance prefers instead of migrating to
+# it later.
+[tool.hatch.build.targets.wheel]
+packages = ["src/cscie103_olap_oltp"]
+
+[tool.ruff]
+target-version = "py312"
+line-length = 100
+# FIRST-PARTY CODE IS FOUND BY LOCATION, NOT BY AN ENUMERATION OF NAMES.
+# known-first-party = [...] goes stale once per module added, and the failure is
+# silent: imports sort as third-party until lint eventually says so.
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+# Deliberately broader than defaults. S is bandit: executed CODE gets checked,
+# not only the data it processes.
+select = ["E", "F", "I", "N", "UP", "B", "S", "SIM", "RUF"]
+
+[tool.ruff.lint.per-file-ignores]
+# S101 forbids `assert` because Python strips asserts under -O, so an assert used
+# as a runtime check silently disappears. That does not apply in a test file:
+# asserts ARE the mechanism and pytest never runs optimized. S603/S607 are
+# subprocess warnings, and proving a gate refuses something cannot be faked
+# in-process; it has to shell out.
+"tests/*.py" = ["S101", "S603", "S607"]
+# DATABRICKS NOTEBOOKS ARE A DIFFERENT DIALECT, SCOPED BY PATH.
+#   F821  spark, dbutils and display are INJECTED BY THE RUNTIME. No import
+#         exists or can exist.
+#   E402  a notebook is cells, not a module. Imports belong in the cell that
+#         introduces them.
+#   N812  `from pyspark.sql import functions as F` is the universal convention.
+#   S101  asserts are the checking mechanism, and a job never runs under -O.
+"notebooks/*.py" = ["F821", "E402", "N812", "S101"]
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
+# Notebooks are excluded for the same reason F821 is disabled for them: spark,
+# dbutils and display have no importable types, so every cell would report
+# errors describing the checker's model rather than the code.
+exclude = ["notebooks/.*"]
+
+# --- Fail closed --------------------------------------------------------------
+# strict = true is not the ceiling. These turn silence into failure.
+#
+# warn_unused_configs   a section matching no file is a config that stopped
+#                       applying when something moved.
+# warn_unreachable      unreachable code is either dead or a wrong type guard.
+# ignore-without-code   a bare `# type: ignore` suppresses EVERY error on that
+#                       line, including ones added later.
+# possibly-undefined    a name assigned only inside a branch, read outside it.
+# redundant-expr        a condition always true or always false, which is how a
+#                       rule ends up dead while its tests still pass.
+warn_unused_configs = true
+warn_unreachable = true
+enable_error_code = [
+  "ignore-without-code",
+  "possibly-undefined",
+  "redundant-expr",
+  "truthy-bool",
+]
+
+# pandera and pyspark ship incomplete stubs. Without this, strict mode reports
+# an error per import for libraries whose types are not this project's concern
+# -- and a blanket ignore_errors would hide real problems in our own code.
+[[tool.mypy.overrides]]
+module = ["pandera.*", "pyspark.*"]
+ignore_missing_imports = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+# MARKERS ARE REGISTERED, AND UNREGISTERED ONES ARE AN ERROR.
+markers = [
+  "integration: requires network and Databricks credentials; excluded from the default run",
+  "spark: requires a local or remote Spark session; slower than a unit test",
+]
+
+# --- Fail closed --------------------------------------------------------------
+# --strict-markers   a typo'd marker is an ERROR, not a silently-created new one.
+#                    Without it @pytest.mark.integraton runs in the default
+#                    suite forever and nobody notices.
+# --strict-config    an unknown ini key is an error rather than ignored. A
+#                    misspelled option that does nothing looks exactly like one
+#                    that works.
+# -ra                report the reason for every non-passing outcome. A skip
+#                    nobody sees is a test that stopped running.
+# -m not integration the default run is HERMETIC, so it can sit behind a git
+#                    hook. A hook needing credentials is a hook people bypass.
+addopts = ["--strict-markers", "--strict-config", "-ra", "-m", "not integration"]
+
+# An xfail that PASSES is a failure. Otherwise a fixed bug leaves its xfail in
+# place forever and the suite reports success for a test asserting nothing.
+xfail_strict = true

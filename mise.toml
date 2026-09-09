@@ -1,6 +1,12 @@
 # mise.toml
 # TASKS. The toolchain lives in flake.nix; this file does not own tools.
 #
+# EVERY PROJECT OPERATION IS A TASK. Not a remembered command, not a paste from
+# scrollback. A one-off CLI invocation is behaviour that exists only in one
+# person's shell history: untested, undiscoverable, impossible to change
+# deliberately, and invisible to review. `gh pr checks --watch` typed by hand is
+# the same category of problem as a clicked setting in a web UI.
+#
 # --- WHY THERE IS NO [tools] BLOCK --------------------------------------------
 #
 # The sibling project pinned nine tools here AND declared the same nine in
@@ -109,7 +115,7 @@ description = "Hermetic tests: no network, no credentials"
 run = "uv run pytest"
 
 [tasks."test:integration"]
-description = "Tests requiring network and Databricks credentials"
+description = "Tests requiring network and credentials"
 # WITHOUT THIS TASK THE INTEGRATION TESTS RUN NOWHERE. They are deselected from
 # the default run by design, so writing one and stopping there produces a test
 # that exists and never executes -- worse than no test, because it looks like
@@ -143,6 +149,17 @@ description = "Evaluate this repo against its own policies, and record the verdi
 # happened -- and a re-run observes a different moment.
 run = "uv run python -m cscie103_olap_oltp.policy"
 
+[tasks."check:ruleset"]
+description = "Verify develop and main are actually protected on the server"
+# CHECKS THE RULESET'S CONTENTS, NOT ITS EXISTENCE. One edited to require
+# nothing is the failure mode that looks like success -- and this repository
+# opened its first pull request in exactly that state.
+#
+# NOT A DEPENDENCY OF `check`. It needs network and gh auth, and a local commit
+# cannot weaken a server-side ruleset, so coupling every commit to both would
+# block offline work for no benefit. CI runs it as its own step.
+run = "uv run python -m cscie103_olap_oltp.policy.check_ruleset"
+
 [tasks.check]
 description = "The quality gate. CI runs exactly this task; nothing is restated in ci.yml"
 # SINGLE SOURCE OF TRUTH. A second copy of the gate list in ci.yml drifts the
@@ -156,10 +173,6 @@ description = "The quality gate. CI runs exactly this task; nothing is restated 
 #
 # POLICY IS PART OF THE GATE, NOT AN OPTIONAL EXTRA. Repository behaviour that
 # is enforced only when someone remembers to run the checker is not enforced.
-#
-# check:ruleset IS NOT HERE, AND THAT IS DELIBERATE. It needs network and gh
-# auth, and a local commit cannot weaken a server-side ruleset. Coupling every
-# commit to both would block offline work for no benefit; CI runs it separately.
 run = '''
 set -euo pipefail
 mise run lint
@@ -231,9 +244,6 @@ description = "Apply repository settings and branch ruleset (idempotent)"
 #   settings  allow auto-merge, merge commits only, delete branch on merge
 #   ruleset   protect develop and main, and REQUIRE the quality gate
 #
-# Without a REQUIRED status check, auto-merge has nothing to wait for and fires
-# immediately -- worse than no auto-merge, because it looks like a gate.
-#
 # MERGE COMMITS ONLY: GitFlow depends on merge topology, and squashing would
 # collapse commits whose reasoning is the most valuable thing in this history.
 #
@@ -276,9 +286,24 @@ gh api "repos/{owner}/{repo}/rulesets" \
 '''
 
 # --- Workflow -----------------------------------------------------------------
-# EVERY PROJECT OPERATION IS A TASK. A one-off CLI invocation is behavior that
-# exists only in one person's shell history: untested, undiscoverable,
-# impossible to change deliberately.
+
+[tasks.pr]
+description = "Open a PR and block until it is merged"
+# BLOCKS, DELIBERATELY. Enabling auto-merge and returning moves the cost to the
+# person, who then watches the Actions tab and confirms the merge by hand on
+# every pull request.
+#
+# Three phases, because waiting for checks to APPEAR and waiting for them to
+# FINISH are different problems, and the rollup lags both. Each is bounded: an
+# unbounded wait hangs when something upstream never resolves, teaching the
+# person nothing.
+run = "uv run python -m cscie103_olap_oltp.git.pr"
+
+[tasks."pr-status"]
+description = "Show merge state and checks for the current branch's PR"
+# A READ OPERATION IS A PROJECT OPERATION TOO. `gh pr view` typed by hand is
+# still a throw-away CLI: the next person guesses which fields matter.
+run = "gh pr view --json number,title,mergeable,mergeStateStatus,statusCheckRollup --jq '{pr:.number,title,mergeable,state:.mergeStateStatus,checks:[.statusCheckRollup[]|{name,conclusion}]}'"
 
 [tasks.status]
 description = "Show branch, working tree, and how it relates to develop"
@@ -330,9 +355,6 @@ description = "Cut a feature branch from origin/develop in THIS shell"
 # The sibling project shipped a `start` task that ran `git switch -c` directly;
 # the switch died with the subshell, the caller stayed on develop, and the task
 # printed "on feature/x" and reported success.
-#
-# Uncommitted work carries across automatically: `git switch -c` keeps the
-# working tree, so a modified file on develop lands on the new branch.
 usage = '''
 arg "<slug>" help="Short kebab-case description, e.g. oltp-contracts"
 '''
@@ -347,14 +369,3 @@ case "$slug" in
     echo "git fetch origin --prune --quiet && git switch -c feature/$slug origin/develop" ;;
 esac
 '''
-
-[tasks."check:ruleset"]
-description = "Verify develop and main are actually protected on the server"
-# CHECKS THE RULESET'S CONTENTS, NOT ITS EXISTENCE. One edited to require
-# nothing is the failure mode that looks like success -- and this repository
-# opened its first pull request in exactly that state.
-#
-# NOT A DEPENDENCY OF `check`. It needs network and gh auth, and a local commit
-# cannot weaken a server-side ruleset, so coupling every commit to both would
-# block offline work for no benefit. CI runs it as its own step.
-run = "uv run python -m cscie103_olap_oltp.policy.check_ruleset"

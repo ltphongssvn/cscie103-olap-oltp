@@ -23,14 +23,13 @@ and the stray commit was pushed.
 NAMESPACED AS cscie103_olap_oltp.git, WHICH IS SAFE, AND A FLAT scripts/git/
 WOULD NOT BE. A top-level directory named `git` on sys.path shadows the `git`
 module GitPython installs -- the documented failure where a file named like a
-real module is imported instead of it. Inside an installed package there is no
-such collision, which is one of the things the src layout buys.
+real module is imported instead of it.
 
 WHY `git rev-parse --local-env-vars` RATHER THAN A HARDCODED LIST
-It is git's own enumeration of the repository-routing variables, so it stays
-correct when git adds one. A literal list is a second copy of something git
-already owns, and it goes stale silently -- the same argument this repository
-makes about ci.yml restating the gate list.
+It is git's own enumeration, so it stays correct when git adds a variable. A
+literal list is a second copy of something git already owns, and it goes stale
+silently -- the same argument this repository makes about ci.yml restating the
+gate list.
 """
 
 from __future__ import annotations
@@ -39,9 +38,25 @@ import os
 import subprocess
 from pathlib import Path
 
+# NOT EVERY LOCAL ENV VAR IS A ROUTING OVERRIDE, AND GIT_PREFIX PROVED IT.
+#
+# `--local-env-vars` lists the variables git treats as repository-local, which
+# is the right set to SCRUB. It is the wrong set to REPORT as a hijack: git
+# exports GIT_PREFIX on every hook invocation to record the subdirectory the
+# command was run from, and its value is usually the empty string. A diagnostic
+# that flags it says "you are being redirected" during the most ordinary hook
+# run there is.
+#
+# Found by a failing test inside a pre-push hook -- the exact context this
+# module exists for, which is why the test ran there and not only on a laptop.
+#
+# STILL SCRUBBED, JUST NOT REPORTED. Removing it is harmless; announcing it is
+# noise that trains people to ignore the diagnostic.
+NON_ROUTING_VARS = frozenset({"GIT_PREFIX"})
+
 
 def _local_env_var_names() -> list[str] | None:
-    """Git's own enumeration of the routing variables, or None if it cannot say.
+    """Git's own enumeration of the repository-local variables, or None.
 
     NO noqa NEEDED: the argument list is entirely literal, so S603 does not
     fire. The asymmetry with git() below is ruff distinguishing a fixed command
@@ -57,7 +72,7 @@ def _local_env_var_names() -> list[str] | None:
 
 
 def scrubbed_env() -> dict[str, str]:
-    """A copy of the environment with git's repository-routing variables removed.
+    """A copy of the environment with git's repository-local variables removed.
 
     FAILS CLOSED ON THE FALLBACK. If git cannot enumerate the variables, every
     GIT_ name is removed rather than a guessed subset: over-removing makes git
@@ -77,16 +92,23 @@ def scrubbed_env() -> dict[str, str]:
 
 
 def routing_overrides_present() -> dict[str, str]:
-    """Which routing variables are set right now, for diagnostics.
+    """Which ROUTING variables are set right now, for diagnostics.
 
-    A hijack that is silently corrected is still worth being able to see. Four
-    CI failures in the sibling project were hard to diagnose precisely because
+    A hijack that is silently corrected is still worth being able to see. In the
+    sibling project four CI failures were hard to diagnose precisely because
     nothing could answer "which variables are in play right now".
+
+    NON_ROUTING_VARS IS EXCLUDED so an ordinary hook run reports nothing. A
+    diagnostic that always fires carries no information.
     """
     names = _local_env_var_names()
     if names is None:
         names = [key for key in os.environ if key.startswith("GIT_")]
-    return {name: os.environ[name] for name in names if name in os.environ}
+    return {
+        name: os.environ[name]
+        for name in names
+        if name in os.environ and name not in NON_ROUTING_VARS
+    }
 
 
 def git(*args: str, cwd: str | Path | None = None) -> subprocess.CompletedProcess[str]:
@@ -97,9 +119,9 @@ def git(*args: str, cwd: str | Path | None = None) -> subprocess.CompletedProces
     for different responses, and an exception collapses both into a traceback.
 
     S603 IS SUPPRESSED NARROWLY: `*args` makes the list computed, which is what
-    ruff is flagging. Every call site in this project passes git subcommands and
-    refs as separate literal arguments, there is no shell, and nothing is
-    interpolated from user input.
+    ruff is flagging. Every call site passes git subcommands and refs as
+    separate literal arguments, there is no shell, and nothing is interpolated
+    from user input.
     """
     return subprocess.run(  # noqa: S603
         ["git", *args],  # noqa: S607

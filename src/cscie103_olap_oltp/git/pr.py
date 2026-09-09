@@ -30,6 +30,13 @@ pull request's statusCheckRollup is a different view and lags it: querying
 immediately after --watch reports "All checks were successful" while the rollup
 still returns conclusion "" for the same check, and the merge is refused as
 "still running". Two views of the same fact, updated at different times.
+
+A FAILURE MUST REPORT BOTH STREAMS, WHICH THIS ORIGINALLY DID NOT.
+The first version printed only stderr when the push failed. The pre-push hook
+writes its entire report -- the failing test, the assertion, the diff -- to
+STDOUT, and git's stderr says only "failed to push some refs". So a completely
+diagnosable failure arrived as four useless words. Capturing output and then
+discarding half of it is worse than not capturing it at all.
 """
 
 from __future__ import annotations
@@ -69,6 +76,18 @@ CHECKS_SETTLE_TIMEOUT = 120
 POLL_INTERVAL = 5
 
 
+def report(result: subprocess.CompletedProcess[str]) -> None:
+    """Print BOTH streams of a failed command.
+
+    Which stream carries the diagnosis is not knowable in advance: git writes
+    its refusal to stderr while a hook writes its entire reasoning to stdout.
+    """
+    if result.stdout.strip():
+        print(result.stdout.strip())
+    if result.stderr.strip():
+        print(result.stderr.strip(), file=sys.stderr)
+
+
 def gh(*args: str, check: bool = True) -> str:
     """Run gh in the repository, or fail loudly.
 
@@ -83,7 +102,7 @@ def gh(*args: str, check: bool = True) -> str:
         cwd=REPO_ROOT,
     )
     if check and result.returncode != 0:
-        print(result.stderr.strip(), file=sys.stderr)
+        report(result)
         raise SystemExit(f"gh {' '.join(args)} failed")
     return result.stdout
 
@@ -325,7 +344,8 @@ def execute_merge(pr_number: int) -> MergeResult:
         cwd=REPO_ROOT,
     )
     if response.returncode != 0:
-        raise SystemExit(f"merge request failed: {response.stderr.strip()}")
+        report(response)
+        raise SystemExit("merge request failed")
 
     return MergeResult.model_validate_json(response.stdout)
 
@@ -361,8 +381,12 @@ def main() -> int:
 
     push = git("push", "-u", "origin", branch, cwd=REPO_ROOT)
     if push.returncode != 0:
-        print(push.stderr.strip(), file=sys.stderr)
-        raise SystemExit("push failed")
+        # BOTH STREAMS. The pre-push hook's report -- the failing test and its
+        # assertion -- is on stdout; git's "failed to push some refs" is on
+        # stderr. Printing one of them turns a diagnosable failure into four
+        # useless words.
+        report(push)
+        raise SystemExit("push refused; see the hook output above")
 
     # AN EXISTING PULL REQUEST IS THE NORMAL CASE, NOT A FAILURE. Pushing a fix
     # to a branch that already has one is what happens after every correction;

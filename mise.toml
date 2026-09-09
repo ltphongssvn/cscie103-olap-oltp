@@ -1,0 +1,371 @@
+# mise.toml
+# TASKS. The toolchain lives in flake.nix; this file does not own tools.
+#
+# EVERY PROJECT OPERATION IS A TASK. Not a remembered command, not a paste from
+# scrollback. A one-off CLI invocation is behaviour that exists only in one
+# person's shell history: untested, undiscoverable, impossible to change
+# deliberately, and invisible to review. `gh pr checks --watch` typed by hand is
+# the same category of problem as a clicked setting in a web UI.
+#
+# --- WHY THERE IS NO [tools] BLOCK --------------------------------------------
+#
+# The sibling project pinned nine tools here AND declared the same nine in
+# flake.nix: two declarations of one fact, which is the drift this repository
+# exists to remove, reproduced at its centre. It then needed a parity-checking
+# script to bridge the gap. This repo starts without the duplication rather than
+# adding a gate to police it.
+#
+# policies/repo/repo.rego R001 ENFORCES THAT ABSENCE, so the reasoning above
+# cannot quietly stop being true.
+#
+# THERE IS ALSO NO [settings] BLOCK. `lockfile = true` and `install_before`
+# govern mise's TOOL INSTALLATION. With no tools to install they enforce
+# nothing, and a setting that enforces nothing is a claim of coverage this
+# repository does not make. flake.lock is the lockfile.
+#
+# NO [env] BLOCK SETTING DATABRICKS_HOST, AND THAT ABSENCE IS DELIBERATE.
+# The CLI resolves credentials in order -- environment variables, then the
+# .databrickscfg DEFAULT profile -- and stops at the first success. A bare
+# DATABRICKS_HOST names a workspace without supplying any way to prove identity,
+# so resolution halts and never reaches the profile holding the OAuth session.
+# The environment supplies a COMPLETE answer or none at all.
+
+# --- Task interpreter ---------------------------------------------------------
+[task_config]
+# EVERY TASK RUNS INSIDE THE NIX DEVSHELL. This line is what makes the toolchain
+# work at all: without it `uv`, `opa` and the rest are unresolvable, because
+# nothing puts them on PATH for a task body.
+#
+# THE ALTERNATIVE WAS `nix develop --command` AT EVERY CALL SITE: every task
+# body, every hook job and the CI workflow, each depending on someone
+# remembering. One forgotten call site is a task that works for whoever happens
+# to be inside a shell already and fails for everyone else. One boundary,
+# declared once. R002 enforces it.
+#
+# THE SHELL IS ALSO PINNED. mise defaults to `sh`, which is bash-in-POSIX-mode
+# on macOS and dash on the Ubuntu runner: same task body, different interpreter,
+# green locally and dead in CI.
+#
+# BASH DOES NOT SET errexit, WHICH IS WHY EVERY MULTI-COMMAND TASK BELOW OPENS
+# WITH `set -euo pipefail`. mise's own default includes errexit and pipefail;
+# overriding the shell discards them. A multi-command task without it reports
+# the exit code of its LAST command, so an earlier failure passes silently.
+# R004 enforces it.
+shell = "nix develop --command bash -c"
+
+# --- Nix ----------------------------------------------------------------------
+
+[tasks."nix:shell"]
+description = "Enter the Nix devShell interactively"
+run = "nix develop"
+
+[tasks."nix:flake-check"]
+description = "Evaluate the flake on every supported platform"
+# --all-systems IS THE POINT. Without it only the current platform is checked,
+# and a package present on Darwin but not Linux passes locally and breaks on the
+# runner.
+#
+# --no-build evaluates derivations without realising them: seconds rather than a
+# toolchain download. IT PROVES NAMES RESOLVE, NOT THAT THEY BUILD. The unfree
+# licence on databricks-cli is checked at REALISATION, so it passed three green
+# platforms here and would have failed on the first real `nix develop`.
+run = "nix flake check --no-build --all-systems"
+
+# --- Gates --------------------------------------------------------------------
+#
+# EVERY TASK RUNS PYTHON THROUGH uv, NEVER BARE python3. A bare interpreter name
+# is PATH resolution, and PATH is ambient state this repo does not control.
+# R003 enforces it.
+
+[tasks.fmt]
+description = "Apply every safe autofix: formatting AND import ordering"
+# TWO OPERATIONS, NOT ONE. `ruff format` handles layout; import ORDERING is the
+# I lint rule, fixed by `ruff check --fix`. Treating fmt as though it covered
+# both makes every import change a hand edit lint catches afterwards.
+#
+# `;` NOT `&&`, AND NOT `set -e`. ruff check --fix exits non-zero when a finding
+# has no safe autofix, which with && would stop the formatter running -- and the
+# formatter is often what resolves the remaining finding, since line-length is
+# fixed by rewrapping. The `lint` gate still reports both, so nothing is hidden.
+run = "uv run ruff check --fix . ; uv run ruff format ."
+
+[tasks.lint]
+description = "Lint (the same invocation CI uses)"
+# WITHOUT --fix, DELIBERATELY. A CI job that fixes its own input can pass while
+# the committed code stays wrong.
+run = "uv run ruff check ."
+
+[tasks.types]
+description = "Static type check, for every platform this code runs on"
+# BOTH PLATFORMS, DELIBERATELY. mypy defaults to whichever OS it runs on and
+# NARROWS sys.platform comparisons, so a Darwin-only branch is invisible to a
+# Linux run and vice versa. This repo is a macOS laptop plus a Linux runner;
+# either gap is a branch nobody checks. mypy has no native multi-platform mode,
+# so invoking it once per target is the documented approach.
+run = '''
+set -euo pipefail
+uv run mypy --platform darwin src tests
+uv run mypy --platform linux src tests
+'''
+
+[tasks.test]
+description = "Hermetic tests: no network, no credentials"
+# addopts in pyproject.toml deselects the integration marker, so this is safe
+# behind a git hook.
+run = "uv run pytest"
+
+[tasks."test:integration"]
+description = "Tests requiring network and credentials"
+# WITHOUT THIS TASK THE INTEGRATION TESTS RUN NOWHERE. They are deselected from
+# the default run by design, so writing one and stopping there produces a test
+# that exists and never executes -- worse than no test, because it looks like
+# coverage.
+run = "uv run pytest -m integration"
+
+[tasks."check:policy"]
+description = "Format, check, lint and unit-test every Rego policy"
+# --fail-on-empty IS NOT OPTIONAL: `opa test` SUCCEEDS when zero tests run, so a
+# renamed package or mistyped path reports green while testing nothing. R005
+# enforces that this flag stays.
+run = '''
+set -euo pipefail
+opa fmt --fail --diff policies/
+opa check --strict policies/
+regal lint policies/
+opa test policies/ --fail-on-empty
+'''
+
+[tasks."check:policy-decisions"]
+description = "Evaluate this repo against its own policies, and record the verdict"
+# THE SPLIT THAT IS KEPT, BECAUSE IT IS A DIFFERENCE IN KIND:
+#   check:policy            are the policies well-formed and tested?
+#   check:policy-decisions  does the CODEBASE satisfy them?
+#
+# A policy suite can be immaculate and enforce nothing. Only evaluating real
+# input proves the repository obeys its own rules.
+#
+# EMITS A DECISION ARTIFACT BEFORE EXITING. A gate that exits non-zero and
+# leaves nothing behind forces the next person to re-run it to find out what
+# happened -- and a re-run observes a different moment.
+run = "uv run python -m cscie103_olap_oltp.policy"
+
+[tasks."check:ruleset"]
+description = "Verify develop and main are actually protected on the server"
+# CHECKS THE RULESET'S CONTENTS, NOT ITS EXISTENCE. One edited to require
+# nothing is the failure mode that looks like success -- and this repository
+# opened its first pull request in exactly that state.
+#
+# NOT A DEPENDENCY OF `check`. It needs network and gh auth, and a local commit
+# cannot weaken a server-side ruleset, so coupling every commit to both would
+# block offline work for no benefit. CI runs it as its own step.
+run = "uv run python -m cscie103_olap_oltp.policy.check_ruleset"
+
+[tasks.check]
+description = "The quality gate. CI runs exactly this task; nothing is restated in ci.yml"
+# SINGLE SOURCE OF TRUTH. A second copy of the gate list in ci.yml drifts the
+# moment a check is added here and forgotten there. R008 enforces that ci.yml
+# does not restate these.
+#
+# NOT depends = [...]. mise runs dependencies in PARALLEL with no order and
+# reports failure as soon as one fails, so a slower gate can never report at
+# all. A gate whose result is never printed is indistinguishable from one that
+# passed. Serial and slower, deliberately.
+#
+# POLICY IS PART OF THE GATE, NOT AN OPTIONAL EXTRA. Repository behaviour that
+# is enforced only when someone remembers to run the checker is not enforced.
+run = '''
+set -euo pipefail
+mise run lint
+mise run types
+mise run test
+mise run check:policy
+mise run check:policy-decisions
+'''
+
+# --- Onboarding ---------------------------------------------------------------
+
+[tasks.setup]
+description = "One-command onboarding: dependencies and git hooks"
+# `lefthook install` writes into .git/hooks, which is NOT version controlled. A
+# fresh clone has no hooks at all, so the person who most needs the guardrails
+# is the one running without them.
+#
+# NEVER ADD -f TO lefthook install. Without it, lefthook declines when
+# core.hooksPath points elsewhere. With it, lefthook force-installs into
+# whatever that path resolves to -- and when that is a GLOBAL hooks directory,
+# this repo's hooks start running in every repository on the machine.
+#
+# THE QUOTING IS LOAD-BEARING. TOML basic strings treat backslash as an escape
+# opener, so a shell body containing a backslash fails to parse. Literal strings
+# (three single quotes) do no escape processing.
+run = '''
+set -euo pipefail
+
+hooks_path="$(git config --get core.hooksPath || true)"
+if [ -n "$hooks_path" ]; then
+  echo "refusing: core.hooksPath is set to '$hooks_path'." >&2
+  echo "lefthook would decline rather than clobber it, which is correct --" >&2
+  echo "but you would be left with no hooks and no explanation." >&2
+  echo "" >&2
+  echo "inspect first:" >&2
+  echo "  git config --show-origin --get-all core.hooksPath" >&2
+  echo "then clear it deliberately:" >&2
+  echo "  git config --unset core.hooksPath" >&2
+  exit 1
+fi
+
+uv sync --locked --all-groups
+lefthook install
+
+echo
+echo "setup complete. hooks active:"
+# RESOLVE THE HOOKS PATH; NEVER ASSUME .git/hooks. In a linked worktree .git is
+# a FILE pointing at .git/worktrees/<name>, so `ls .git/hooks` fails with "Not a
+# directory" -- and that cosmetic listing takes the exit code with it after
+# every real step has succeeded.
+hooks_dir="$(git rev-parse --git-path hooks)"
+if [ -d "$hooks_dir" ]; then
+  ls "$hooks_dir" | grep -v sample | sed 's|^|  |'
+else
+  echo "  (none found at $hooks_dir)"
+fi
+'''
+
+# --- Repository configuration -------------------------------------------------
+
+[tasks."repo:configure"]
+description = "Apply repository settings and branch ruleset (idempotent)"
+# REPOSITORY SETTINGS ARE INFRASTRUCTURE. Clicked in a web UI they are invisible
+# to the repo, unreviewable and unreproducible -- and this repository shipped
+# its first pull request with NO protection and NO required check, which is the
+# failure that motivated writing this down.
+#
+# TWO HALVES, AND THE SECOND MAKES THE FIRST MEAN ANYTHING:
+#   settings  allow auto-merge, merge commits only, delete branch on merge
+#   ruleset   protect develop and main, and REQUIRE the quality gate
+#
+# MERGE COMMITS ONLY: GitFlow depends on merge topology, and squashing would
+# collapse commits whose reasoning is the most valuable thing in this history.
+#
+# required_approving_review_count IS 0 because this is a solo repository.
+# Requiring a review nobody can give would block every merge; the gate is CI.
+#
+# THE RULESET IS A COMMITTED CONTRACT, NOT AN INLINE PAYLOAD. Keeping it in
+# contracts/ makes a change to branch protection a reviewable diff.
+run = '''
+set -euo pipefail
+
+gh api -X PATCH "repos/{owner}/{repo}" \
+  -F allow_auto_merge=true \
+  -F allow_merge_commit=true \
+  -F allow_squash_merge=false \
+  -F allow_rebase_merge=false \
+  -F delete_branch_on_merge=true \
+  > /dev/null
+echo "settings applied"
+
+name="develop-and-main-protection"
+existing="$(gh api "repos/{owner}/{repo}/rulesets" --jq \
+  ".[] | select(.name == \"$name\") | .id" || true)"
+
+if [ -n "$existing" ]; then
+  gh api -X PUT "repos/{owner}/{repo}/rulesets/$existing" \
+    --input contracts/ruleset-develop-and-main.json > /dev/null
+  echo "ruleset updated (id $existing)"
+else
+  gh api -X POST "repos/{owner}/{repo}/rulesets" \
+    --input contracts/ruleset-develop-and-main.json > /dev/null
+  echo "ruleset created"
+fi
+
+echo "--- readback ---"
+gh api "repos/{owner}/{repo}" \
+  --jq '{auto_merge:.allow_auto_merge, merge_commit:.allow_merge_commit, squash:.allow_squash_merge, rebase:.allow_rebase_merge, delete_on_merge:.delete_branch_on_merge}'
+gh api "repos/{owner}/{repo}/rulesets" \
+  --jq '.[] | {id, name, enforcement}'
+'''
+
+# --- Workflow -----------------------------------------------------------------
+
+[tasks.pr]
+description = "Open a PR and block until it is merged"
+# BLOCKS, DELIBERATELY. Enabling auto-merge and returning moves the cost to the
+# person, who then watches the Actions tab and confirms the merge by hand on
+# every pull request.
+#
+# Three phases, because waiting for checks to APPEAR and waiting for them to
+# FINISH are different problems, and the rollup lags both. Each is bounded: an
+# unbounded wait hangs when something upstream never resolves, teaching the
+# person nothing.
+run = "uv run python -m cscie103_olap_oltp.git.pr"
+
+[tasks."pr-status"]
+description = "Show merge state and checks for the current branch's PR"
+# A READ OPERATION IS A PROJECT OPERATION TOO. `gh pr view` typed by hand is
+# still a throw-away CLI: the next person guesses which fields matter.
+run = "gh pr view --json number,title,mergeable,mergeStateStatus,statusCheckRollup --jq '{pr:.number,title,mergeable,state:.mergeStateStatus,checks:[.statusCheckRollup[]|{name,conclusion}]}'"
+
+[tasks.status]
+description = "Show branch, working tree, and how it relates to develop"
+run = '''
+set -euo pipefail
+echo "branch:   $(git rev-parse --abbrev-ref HEAD)"
+echo "upstream: $(git rev-parse --abbrev-ref --symbolic-full-name '@{u}' 2>/dev/null || echo '(none)')"
+echo
+echo "--- working tree ---"
+if [ -z "$(git status --porcelain)" ]; then
+  echo "clean"
+else
+  git status --short
+fi
+echo
+echo "--- unmerged into develop ---"
+git log --oneline develop..HEAD 2>/dev/null || echo "(on develop)"
+'''
+
+[tasks."start:check"]
+description = "Refuse to work on a protected branch"
+# Wired into the pre-commit hook so the guard fires before a commit lands rather
+# than after. Fails closed, which is what an unattended run needs: it will not
+# notice a warning, but it will notice a non-zero exit. R011 enforces that the
+# hook keeps calling it.
+run = '''
+set -euo pipefail
+branch="$(git rev-parse --abbrev-ref HEAD)"
+case "$branch" in
+  develop|main)
+    echo "refusing: on protected branch '$branch'." >&2
+    echo "" >&2
+    echo "GitFlow: work happens on a feature branch cut from origin/develop." >&2
+    echo "" >&2
+    echo "nothing is lost -- carry the work across with:" >&2
+    echo "  git switch -c feature/<slug>" >&2
+    exit 1 ;;
+esac
+echo "on $branch (not protected)"
+'''
+
+[tasks."start:here"]
+description = "Cut a feature branch from origin/develop in THIS shell"
+# PRINTS the command instead of pretending to run it, because a mise task runs
+# in a subshell and cannot change the invoking shell's branch:
+#
+#   eval "$(mise run start:here <slug>)"
+#
+# The sibling project shipped a `start` task that ran `git switch -c` directly;
+# the switch died with the subshell, the caller stayed on develop, and the task
+# printed "on feature/x" and reported success.
+usage = '''
+arg "<slug>" help="Short kebab-case description, e.g. oltp-contracts"
+'''
+run = '''
+set -euo pipefail
+slug="$usage_slug"
+
+case "$slug" in
+  *[!a-z0-9-]*|"")
+    echo "echo 'slug must be lowercase kebab-case: $slug' >&2; false" ;;
+  *)
+    echo "git fetch origin --prune --quiet && git switch -c feature/$slug origin/develop" ;;
+esac
+'''

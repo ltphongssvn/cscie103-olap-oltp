@@ -1,0 +1,116 @@
+# .github/workflows/ci.yml
+name: CI
+
+# WHY push AND pull_request, WHICH LOOKS REDUNDANT
+# pull_request checks the MERGE RESULT -- this branch merged into the base --
+# which is what actually ships. push checks the branch as written. They disagree
+# when the base moves underneath, and only the merge result gates the merge.
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main, develop]
+
+# LEAST PRIVILEGE AT THE WORKFLOW LEVEL. The default token is far broader than a
+# gate needs. This workflow reads code and nothing else; it publishes nothing,
+# comments on nothing, and writes no packages.
+permissions:
+  contents: read
+
+concurrency:
+  # Supersede in-flight runs on the same ref. A superseded run is checking code
+  # nobody will merge.
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    # NAMED, AND THE NAME IS LOAD-BEARING. GitHub matches required status checks
+    # by this exact string, and contracts/ruleset-develop-and-main.json requires
+    # "quality gate". Renaming this job without renaming the required check
+    # leaves a requirement that can never be satisfied, and GitHub does not warn
+    # about it -- tests/test_ruleset.py compares the two for that reason.
+    name: quality gate
+    runs-on: ubuntu-latest
+    steps:
+      # PINNED TO A COMMIT SHA, NOT A TAG. A tag is mutable -- the owner can
+      # repoint v5 at any commit, so the workflow would run whatever code sits
+      # behind that tag today. The comment carries the version so the pin stays
+      # readable; the SHA is what executes. Update deliberately via `zizmor
+      # --fix` or by re-resolving the tag, never by editing the comment.
+      # policies/repo/repo.rego R006 enforces the SHA form.
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          # FULL HISTORY IS REQUIRED, NOT A PREFERENCE. The default is a shallow
+          # clone of depth 1, and a secret scan walks every commit. Against a
+          # shallow clone it reports clean while checking almost nothing -- a
+          # gate that manufactures confidence, which is worse than no gate.
+          fetch-depth: 0
+          # actions/checkout persists GITHUB_TOKEN into .git/config by default,
+          # where any later step can read it and any artifact can carry it off
+          # the runner. Nothing here pushes or tags, so the credential has no
+          # legitimate use after checkout.
+          persist-credentials: false
+
+      # A STALE LOCK IS THE STALENESS RISK THAT REMAINS. flake.lock pins one
+      # nixpkgs revision and holds it forever unless someone updates it.
+      #
+      # fail-mode IS NOT OPTIONAL HERE. This action always exits 0 by default and
+      # reports findings as a Markdown summary instead. A summary nobody reads is
+      # not a gate.
+      #
+      # NOT A SCHEDULED update-flake-lock WORKFLOW. GitHub disables scheduled
+      # workflows after 60 days without repository activity, and a successful
+      # scheduled run does not itself count as activity. A refresh that silently
+      # stops leaves a lock rotting while looking maintained. Tying the check to
+      # every PR means it cannot stop without someone noticing.
+      - uses: DeterminateSystems/flake-checker-action@fca8ac4a1791a59f5599f06b8dcf4c5bd7c8d53f
+        with:
+          fail-mode: true
+          check-outdated: false
+          condition: "numDaysOld < 30"
+
+      # NIX ON THE RUNNER, WHICH REMOVES A WHOLE CLASS OF WORKAROUND. Without it
+      # every gate needing a pinned tool would need a second installation path,
+      # and CI would verify a toolchain nobody develops against.
+      #
+      # THE TAGGED ACTION, NOT nix-installer-action@main. That one uses the most
+      # recent Determinate Nix even when the action itself is pinned, so a SHA
+      # pin would describe the wrapper while the Nix underneath moved.
+      #
+      # NO magic-nix-cache-action. Its cache authenticates against FlakeHub,
+      # whose hosted cache no longer has a useful free tier.
+      - uses: DeterminateSystems/determinate-nix-action@021c8a1bd3570eb21f5c20a054812b0c4d9ca614 # v3.22.3
+
+      # mise IS STILL NEEDED, BUT IT NO LONGER INSTALLS TOOLS. `mise run check`
+      # is the gate and something must provide mise; the tools reach the task
+      # through task_config, which enters the Nix devShell.
+      - uses: jdx/mise-action@5228313ee0372e111a38da051671ca30fc5a96db # v3
+        with:
+          install: false
+
+      # ONE COMMAND. ci.yml deliberately restates NOTHING about what `check`
+      # contains.
+      #
+      # Listing lint, types and test as separate steps would be a second copy of
+      # a list that lives in mise.toml, and it drifts the moment a gate is added
+      # to one and forgotten in the other. R008 enforces that absence.
+      - name: mise run check
+        run: mise run check
+
+      # A SEPARATE STEP, NOT PART OF `check`, AND THAT IS THE DESIGN.
+      #
+      # It needs network and gh auth. A local commit cannot weaken a server-side
+      # ruleset, so making every commit depend on both would block offline work
+      # for no benefit -- and a gate that fails on a plane is one people bypass.
+      #
+      # NOT A SCHEDULED WORKFLOW either: GitHub disables those after 60 days of
+      # repository inactivity, and a security check that silently stops is worse
+      # than none. Tying it to CI removes the cron dependency.
+      #
+      # RUNS AFTER `check` because if the code is broken, the protection status
+      # is the less urgent of the two findings.
+      - name: mise run check:ruleset
+        run: mise run check:ruleset
+        env:
+          GH_TOKEN: ${{ github.token }}

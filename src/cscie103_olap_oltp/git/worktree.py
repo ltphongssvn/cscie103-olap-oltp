@@ -310,9 +310,25 @@ def cmd_remove(slug: str) -> int:
     # happened.
     deleted = git("branch", "-d", branch, cwd=REPO_ROOT)
     if deleted.returncode != 0:
+        detail = deleted.stderr.strip()
+
+        # TWO DIFFERENT FAILURES, AND THE OLD MESSAGE REPORTED BOTH AS ONE.
+        #
+        # A branch that does not exist is ALREADY GONE -- usually because `sync`
+        # removed it after the merge -- and the worktree may since have moved to
+        # a different branch entirely. Calling that "unmerged" sent the reader
+        # to `git branch -D`, which would report the same absence again.
+        #
+        # Observed here: `worktree:remove config-audit` succeeded, then claimed
+        # feature/config-audit was unmerged when sync had deleted it minutes
+        # earlier.
+        if "not found" in detail:
+            print(f"removed the worktree; branch {branch} was already gone")
+            return 0
+
         print(
             f"worktree removed, but branch {branch} was NOT deleted:\n"
-            f"  {deleted.stderr.strip()}\n"
+            f"  {detail}\n"
             "That refusal means the branch is unmerged. Merge it, or delete it "
             "deliberately with `git branch -D`.",
             file=sys.stderr,

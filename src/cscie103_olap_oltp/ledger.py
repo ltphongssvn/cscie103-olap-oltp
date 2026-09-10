@@ -49,6 +49,7 @@ from typing import IO, Any
 from pydantic import BaseModel, ConfigDict, Field
 
 from cscie103_olap_oltp.policy.snapshot import REPO_ROOT
+from cscie103_olap_oltp.remediation import ActionableError
 
 __all__ = [
     "GENESIS_HASH",
@@ -70,13 +71,20 @@ LEDGER_PATH = REPO_ROOT / ".artifacts" / "ledger.jsonl"
 MACHINE_ID_PATH = Path.home() / ".config" / "cscie103-olap-oltp" / "machine-id"
 
 
-class LedgerLockError(RuntimeError):
+class LedgerLockError(ActionableError):
     """The ledger could not be locked, so nothing was written.
 
     FAIL CLOSED. Appending without the lock risks forking the chain, and a
     forked chain reports tampering that never happened -- which trains people to
     ignore the one signal this file exists to give.
+
+    ActionableError, NOT RuntimeError, AND THE DISTINCTION IS LOAD-BEARING. The
+    sibling project made this exact class a RuntimeError and its classification
+    guard never saw it, because that guard walked ActionableError subclasses --
+    so a new unclassified error slipped past the check built to prevent it.
     """
+
+    code = "ERR_LEDGER_LOCKED"
 
 
 def machine_id() -> str:
@@ -172,10 +180,14 @@ def _acquire_exclusive(handle: IO[str], lock_path: Path, timeout_seconds: float)
         except OSError:
             if time.monotonic() >= deadline:
                 raise LedgerLockError(
-                    f"could not lock {lock_path} within {timeout_seconds}s.\n"
-                    "Another run holds the ledger lock. Retry; if it persists, a "
-                    "crashed process may have left the lock file, and removing it "
-                    "is safe once no run is in flight."
+                    "could not acquire the ledger lock",
+                    remediation=(
+                        "Another run holds the lock. Retry; if it persists, a "
+                        "crashed process may have left the lock file behind, and "
+                        "removing it is safe once no run is in flight."
+                    ),
+                    lock_path=str(lock_path),
+                    timeout_seconds=timeout_seconds,
                 ) from None
             time.sleep(0.05)
 

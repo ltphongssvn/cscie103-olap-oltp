@@ -215,3 +215,36 @@ deny contains finding if {
 		"message": "xfail_strict must be true; a passing xfail is a failure",
 	}
 }
+
+# --- R015: the remote is reached over SSH -------------------------------------
+# FLEET CONSISTENCY, NOT SECRECY. This repository is public, so HTTPS would need
+# no credential at all -- and that is exactly why the rule has to be written
+# down. A fleet where each repository authenticates differently is one where
+# nobody can predict what a given machine can reach.
+#
+# THIS DRIFTED IN PRACTICE, WHICH IS WHY IT IS A RULE AND NOT A COMMENT. The
+# Lightning Studio's clone was created before the transport was decided and
+# ended up on HTTPS while the sibling project sat on SSH. A Python assertion
+# held the convention; nothing refused when it was broken.
+#
+# THE HOST IS NAMED IN THE MESSAGE. A denial that says only "not SSH" sends the
+# reader back to a terminal to discover what the remote actually is.
+#
+# A CLONE WITH NO ORIGIN DENIES TOO: origin_is_ssh is false and the host is
+# empty, so absence lands on refusal rather than on undefined.
+deny contains finding if {
+	not input.git.origin_is_ssh
+
+	# SCOPED TO DURABLE CLONES. A CI runner's checkout is ephemeral,
+	# token-authenticated and deleted minutes later, so it cannot choose a
+	# transport without storing a key -- the very thing this rule avoids.
+	not input.git.is_ephemeral_checkout
+	finding := {
+		"id": "R015",
+		"reason_code": "REMOTE_NOT_SSH",
+		"message": sprintf(
+			"origin must be reached over SSH; host is %q",
+			[input.git.origin_host],
+		),
+	}
+}

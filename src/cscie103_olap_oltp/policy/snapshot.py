@@ -20,6 +20,8 @@ TWO DESIGN CONSTRAINTS, BOTH LEARNED FROM FAIL-OPEN BUGS:
 
 from __future__ import annotations
 
+import os
+import subprocess
 import tomllib
 from pathlib import Path
 from typing import Any
@@ -152,6 +154,59 @@ def pytest_facts(path: Path) -> dict[str, Any]:
     }
 
 
+def git_facts(root: Path | None = None) -> dict[str, Any]:
+    """Facts feeding R015: how this clone reaches its remote.
+
+    SSH IS THE FLEET-WIDE TRANSPORT, and until this fact existed that rule was
+    held by a Python assertion -- which makes it a convention rather than a
+    rule. A convention is what drifted: the Studio's clone was created over
+    HTTPS while the sibling project sat on SSH, and nothing refused.
+
+    THE HOST IS CARRIED, NOT JUST THE VERDICT. A denial that says "not SSH"
+    without naming what it found sends the reader back to the terminal.
+
+    ABSENCE IS NOT A PASS. A clone with no origin reports origin_is_ssh false
+    with an empty host, so R015 denies rather than evaluating against undefined.
+    """
+    result = subprocess.run(
+        ["git", "remote", "get-url", "origin"],  # noqa: S607
+        capture_output=True,
+        text=True,
+        check=False,
+        cwd=root or REPO_ROOT,
+    )
+    url = result.stdout.strip() if result.returncode == 0 else ""
+
+    # scp-style `user@host:owner/repo` or an explicit ssh:// scheme. Anything
+    # else -- https, git, a bare path -- is not SSH.
+    is_ssh = bool(url) and (url.startswith("ssh://") or "@" in url.split("/", 1)[0])
+
+    host = ""
+    if "@" in url:
+        host = url.split("@", 1)[1].split(":", 1)[0].split("/", 1)[0]
+    elif "://" in url:
+        host = url.split("://", 1)[1].split("/", 1)[0]
+
+    # EPHEMERAL CHECKOUTS ARE OUT OF SCOPE FOR R015, AND THAT IS A SCOPE
+    # DECISION RATHER THAN AN EXEMPTION.
+    #
+    # A runner's clone is created by actions/checkout, authenticated with a
+    # scoped token, and deleted minutes later. Every reason SSH is the fleet
+    # rule -- predictable reach, one key to reason about, no stored credential
+    # -- concerns durable developer machines. CI cannot choose its transport
+    # without storing a key, which is the thing the rule exists to avoid.
+    #
+    # CI IS SET BY EVERY MAJOR RUNNER, the same signal the live gates use to
+    # decide whether missing credentials are a skip or a failure.
+    ephemeral = os.environ.get("CI", "").lower() in {"true", "1"}
+
+    return {
+        "origin_is_ssh": is_ssh,
+        "origin_host": host,
+        "is_ephemeral_checkout": ephemeral,
+    }
+
+
 def build_snapshot(root: Path) -> dict[str, Any]:
     """Assemble the complete policy input.
 
@@ -166,4 +221,5 @@ def build_snapshot(root: Path) -> dict[str, Any]:
         "lefthook": lefthook_facts(root / "lefthook.yml"),
         "python": python_facts(root),
         "pytest": pytest_facts(root / "pyproject.toml"),
+        "git": git_facts(root),
     }

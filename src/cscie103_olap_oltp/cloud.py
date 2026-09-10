@@ -34,12 +34,14 @@ denies a non-SSH origin, so the rule is refused rather than merely intended.
 
 from __future__ import annotations
 
+import os
 import re
 import subprocess
 import sys
 
 from cscie103_olap_oltp.environment import current
 from cscie103_olap_oltp.git.env import scrubbed_env
+from cscie103_olap_oltp.remediation import ActionableError
 
 # THE STUDIO AND TEAMSPACE COME FROM THE ENVIRONMENT, NOT FROM HERE.
 #
@@ -217,6 +219,86 @@ git log --oneline -1
 """
 
 
+# ssh-add's DOCUMENTED EXIT CODES, NAMED ONCE. 1 and 2 describe different
+# problems with different remedies, and collapsing them sends half the readers
+# to the wrong fix.
+AGENT_EMPTY = 1
+AGENT_UNREACHABLE = 2
+
+
+class AgentHasNoIdentitiesError(ActionableError):
+    """The agent is running but holds no key, so forwarding forwards nothing.
+
+    OBSERVED, NOT ANTICIPATED. Every Studio operation failed with a
+    "Permission denied (publickey)" naming GitHub, while local git kept working
+    -- because agent FORWARDING does not consult the macOS keychain, so a key
+    git resolves happily is absent from what the Studio receives.
+
+    THE ERROR IS NOT QUOTED VERBATIM: it contains a user@host string the PII
+    scanner correctly reads as an address, and this repository eliminates
+    findings at source rather than allowlisting them.
+
+    macOS CAUSES THIS BY DESIGN: Apple re-aligned ssh-agent with mainstream
+    OpenSSH, so a key added to the keychain is NOT re-added to the agent after a
+    reboot. The failure appears spontaneously, on a machine that worked
+    yesterday, reporting an error that names GitHub rather than the agent.
+    """
+
+    code = "ERR_SSH_AGENT_EMPTY"
+
+
+class AgentUnreachableError(ActionableError):
+    """There is no agent to talk to, or its socket is stale.
+
+    A DIFFERENT PROBLEM FROM AN EMPTY AGENT, and the usual causes are
+    structural rather than forgetful: a fresh login shell, `sudo`, a
+    reattached multiplexer, or a CI context where SSH_AUTH_SOCK never carried
+    over.
+    """
+
+    code = "ERR_SSH_AGENT_UNREACHABLE"
+
+
+def require_forwardable_agent() -> None:
+    """Fail before connecting, naming the agent rather than the remote.
+
+    A PREFLIGHT, WHICH IS THE POINT. Without it ssh completes, GitHub refuses
+    the key, and the reader is handed a permission error they will attribute to
+    their account or the repository -- neither of which is wrong.
+    """
+    listed = subprocess.run(
+        ["ssh-add", "-l"],  # noqa: S607
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    if listed.returncode == AGENT_UNREACHABLE:
+        raise AgentUnreachableError(
+            "no ssh-agent is reachable, so nothing can be forwarded",
+            remediation=(
+                "Start one and load your key:\n"
+                '  eval "$(ssh-agent -s)"\n'
+                "  ssh-add --apple-use-keychain ~/.ssh/id_ed25519"
+            ),
+            ssh_auth_sock=os.environ.get("SSH_AUTH_SOCK", "(unset)"),
+        )
+
+    if listed.returncode == AGENT_EMPTY:
+        raise AgentHasNoIdentitiesError(
+            "the ssh-agent holds no identities, so an empty agent is forwarded",
+            remediation=(
+                "Load your key:\n"
+                "  ssh-add --apple-use-keychain ~/.ssh/id_ed25519\n"
+                "Make it survive a reboot by adding to ~/.ssh/config under "
+                "`Host *`:\n"
+                "  AddKeysToAgent yes\n"
+                "  UseKeychain yes\n"
+                "  IdentityFile ~/.ssh/id_ed25519"
+            ),
+        )
+
+
 def run_on_studio(script: str) -> int:
     """Execute a script on the Studio, streaming its output.
 
@@ -226,6 +308,8 @@ def run_on_studio(script: str) -> int:
     S603 IS SUPPRESSED NARROWLY: the argument list comes from ssh_command(),
     built from module constants with nothing interpolated from user input.
     """
+    require_forwardable_agent()
+
     result = subprocess.run(  # noqa: S603
         ssh_command(),
         input=script,

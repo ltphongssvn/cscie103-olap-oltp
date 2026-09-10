@@ -23,6 +23,8 @@ import os
 import subprocess
 from pathlib import Path
 
+import pytest
+
 from cscie103_olap_oltp.git.env import git, routing_overrides_present, scrubbed_env
 
 
@@ -106,3 +108,69 @@ def test_no_overrides_reports_empty(monkeypatch) -> None:  # type: ignore[no-unt
     for name in ("GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE"):
         monkeypatch.delenv(name, raising=False)
     assert routing_overrides_present() == {}
+
+
+def test_a_poisoned_git_dir_cannot_retarget_a_fixture_repository(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """THE REGRESSION THAT COST A COMMIT TO THE REAL REPOSITORY.
+
+    A fixture ran `git commit` with cwd pointed at a scratch repository and the
+    commit landed on the actual feature branch, because GIT_DIR outranks cwd and
+    git exports it while a hook runs -- and the pre-push hook runs this suite.
+
+    RED BEFORE GREEN, DELIBERATELY: the first half proves the poison WORKS, so a
+    passing second half means the scrub defeated something real rather than
+    nothing at all.
+    """
+    victim = tmp_path / "victim"
+    victim.mkdir()
+    subprocess.run(["git", "init", "-q", victim], check=True, capture_output=True)
+
+    scratch = tmp_path / "scratch"
+    scratch.mkdir()
+    subprocess.run(["git", "init", "-q", scratch], check=True, capture_output=True)
+
+    # monkeypatch, NOT os.environ. A direct assignment with a trailing `del`
+    # leaks GIT_DIR into every later test whenever an assertion below raises --
+    # reintroducing the exact hazard this test exists to prevent. monkeypatch
+    # reverses the change even on failure.
+    monkeypatch.setenv("GIT_DIR", str(victim / ".git"))
+
+    # THE POISON WORKS: git reports the victim even though cwd is the scratch.
+    hijacked = subprocess.run(
+        ["git", "rev-parse", "--absolute-git-dir"],
+        cwd=scratch,
+        env=dict(os.environ),
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    assert str(victim) in hijacked.stdout
+
+    # THE SCRUB DEFEATS IT: the same call resolves from cwd.
+    resolved = subprocess.run(
+        ["git", "rev-parse", "--absolute-git-dir"],
+        cwd=scratch,
+        # THE SCRUBBED ENVIRONMENT AS IT IS, not one with GIT_DIR blanked. An
+        # earlier draft set it to "" and would have passed even if scrubbed_env()
+        # did nothing -- asserting git's tolerance of an empty value rather than
+        # our removal of a real one.
+        env=scrubbed_env(),
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert str(victim) not in resolved.stdout
+
+
+def test_the_conftest_guard_removes_routing_variables() -> None:
+    """THE ENFORCEMENT, ASSERTED RATHER THAN ASSUMED.
+
+    tests/conftest.py strips these for every test. If that regressed, fixtures
+    would silently depend on being run outside a hook -- which is exactly the
+    condition under which the original damage went unnoticed.
+    """
+    assert "GIT_DIR" not in os.environ
+    assert "GIT_WORK_TREE" not in os.environ
+    assert "GIT_INDEX_FILE" not in os.environ

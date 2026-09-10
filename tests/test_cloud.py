@@ -41,10 +41,12 @@ this case: no new keys, no key management, and NOTHING stored on the server --
 so a compromised Studio leaves no credential to hunt down and revoke.
 """
 
+import inspect
+
 import pytest
 
+from cscie103_olap_oltp import cloud
 from cscie103_olap_oltp.cloud import (
-    STUDIO_HOST,
     STUDIO_REPO_PATH,
     clone_script,
     parse_remote,
@@ -52,6 +54,7 @@ from cscie103_olap_oltp.cloud import (
     ssh_command,
     studio_remote_url,
 )
+from cscie103_olap_oltp.environment import current
 
 # ASSEMBLED, NEVER WRITTEN ADJACENT. Together these spell the scp-style form
 # that Presidio reads as an address; apart they are two ordinary strings.
@@ -122,11 +125,26 @@ def test_the_studio_path_is_persistent() -> None:
 def test_agent_forwarding_is_scoped_to_the_studio_host() -> None:
     """NEVER GLOBAL. A host you forward to can request signatures from your
     agent for any key it holds, so the blast radius is every system that key
-    reaches."""
+    reaches.
+
+    THE HOST COMES FROM THE ENVIRONMENT, having been a literal here AND in
+    mise.toml. A Studio alias is per-person, so hardcoding it made the module
+    work for exactly one operator.
+    """
     command = ssh_command()
     assert "-o" in command
     assert "ForwardAgent=yes" in command
-    assert STUDIO_HOST in command
+    assert current().lightning_studio in command
+
+
+def test_the_studio_host_is_not_hardcoded() -> None:
+    """THE ASSERTION THAT KEEPS IT THAT WAY.
+
+    Reintroducing a literal would work on this machine and silently target the
+    wrong Studio everywhere else -- the failure that is hardest to notice.
+    """
+    source = inspect.getsource(cloud)
+    assert "serene-volhard" not in source
 
 
 def test_ssh_is_non_interactive() -> None:

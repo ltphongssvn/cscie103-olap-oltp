@@ -111,6 +111,21 @@ GATES: tuple[Gate, ...] = (
         name="ledger",
         command=("uv", "run", "python", "-m", "cscie103_olap_oltp.ledger"),
     ),
+    # THE ENV CONTRACT IS DERIVED, SO IT MUST BE VERIFIED. A generated file
+    # that nobody regenerates is a hand-maintained file with a misleading
+    # header -- and template drift is the documented number-one "works on my
+    # machine" bug.
+    Gate(
+        name="env template",
+        command=(
+            "uv",
+            "run",
+            "python",
+            "-m",
+            "cscie103_olap_oltp.environment",
+            "--check-template",
+        ),
+    ),
     # PII BY CONTENT, WHERE THE OTHER TWO CHECK FORM AND PATH.
     #
     # .gitignore filters by FORMAT and the hygiene gate by PATH; both are

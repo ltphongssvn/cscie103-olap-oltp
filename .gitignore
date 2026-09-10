@@ -35,3 +35,14 @@ result-*
 .DS_Store
 .idea/
 .vscode/
+
+# LOCAL CONFIGURATION, NEVER COMMITTED.
+#
+# .env carries this machine's endpoints and, potentially, a credential. Leaked
+# secrets are the single largest source of security incidents, and rewriting
+# history does not un-leak one -- so the file is refused from commit zero
+# rather than after the first mistake.
+#
+# .env.example IS COMMITTED and carries no real values. It is generated from
+# environment.py, so the two cannot drift.
+.env

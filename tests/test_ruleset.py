@@ -12,21 +12,35 @@ TWO LAYERS, DELIBERATELY SPLIT:
     the server's actual state fetched from the API
 
 Testing only the file proves nothing about the server. Testing only the server
-leaves no reviewable record of intent. The pure function is unit-tested against
-the file; the marked test compares the server to it.
+leaves no reviewable record of intent.
 
-THE FIXTURE IS TYPED dict[str, Any], NOT dict[str, object]. `object` makes every
-nested access an error, which the first version of this file buried under
-guessed `type: ignore` codes -- and mypy's ignore-without-code and
-warn_unused_ignores rejected them, correctly. A suppression that has to be
-guessed is a signal the type is wrong, not that the checker is.
+WHY A MISSING TOKEN IS NOT UNIFORMLY A SKIP, WHICH IS THE INTERESTING PART.
+
+When this test first ran in CI it died with `CalledProcessError ... exit status
+4` -- a traceback that reads "protection is broken" and actually meant "gh has
+no credentials". The obvious repair is `pytest.skip` on missing auth. That
+repair is wrong, and would have been worse than the bug: a skipped test makes
+the job green while verifying nothing, which is the same fail-open shape as
+wrapping a test in `|| true`. The ecosystem agrees loudly enough that a plugin
+exists whose entire purpose is turning skips into failures so CI cannot skip
+tests because of missing dependencies.
+
+So the question is not "do I have credentials" but "was this environment
+supposed to have them". A laptop was never promised a token, and skipping there
+is honest. A runner promises one; its absence is a defect in the workflow, and
+the only useful outcome is a failure that says so.
+
+That is the same three-valued logic the verdict contract already uses: `unknown`
+is tolerable where nothing was promised and is a failure where something was.
 """
 
 import json
+import os
 from typing import Any
 
 import pytest
 
+from cscie103_olap_oltp.git.ghcli import NotAuthenticatedError
 from cscie103_olap_oltp.policy.ruleset import (
     REQUIRED_CHECK,
     fetch_ruleset,
@@ -35,6 +49,17 @@ from cscie103_olap_oltp.policy.ruleset import (
 from cscie103_olap_oltp.policy.snapshot import REPO_ROOT
 
 CONTRACT_PATH = REPO_ROOT / "contracts" / "ruleset-develop-and-main.json"
+
+
+def credentials_are_promised() -> bool:
+    """Whether this environment undertook to supply gh credentials.
+
+    CI IS SET BY EVERY MAJOR RUNNER, GitHub Actions included, and is the
+    conventional signal for "this is automation, not a workstation". Reading it
+    is what lets one test be honest on a laptop and strict on a runner without
+    two copies of the test.
+    """
+    return os.environ.get("CI", "").lower() in {"true", "1"}
 
 
 def _contract() -> dict[str, Any]:
@@ -55,7 +80,7 @@ def _reason_codes(document: dict[str, Any]) -> set[str]:
 def test_committed_contract_satisfies_its_own_checks() -> None:
     """The file we PUT to GitHub must itself pass the verification.
 
-    Otherwise `repo:configure` would install a ruleset that `check:ruleset`
+    Otherwise `repo:configure` would install a ruleset that the verification
     immediately rejects -- two halves of the same intent disagreeing.
     """
     assert ruleset_violations(_contract()) == []
@@ -130,12 +155,35 @@ def test_required_check_name_matches_the_ci_job() -> None:
     assert f"name: {REQUIRED_CHECK}" in workflow
 
 
+def test_the_workflow_passes_a_token_to_the_gate() -> None:
+    """The gate shells out to gh, so the step must carry GH_TOKEN.
+
+    THIS TEST EXISTS BECAUSE ITS ABSENCE COST A CI RUN. Folding the ruleset
+    check into `mise run check` left it in a step with no token, and gh exited 4
+    -- "not authenticated" -- which reads like a missing ruleset. Offline and
+    cheap, so the mistake cannot recur silently.
+    """
+    workflow = (REPO_ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
+    assert "GH_TOKEN:" in workflow
+
+
 @pytest.mark.integration
 def test_server_ruleset_matches_the_contract() -> None:
     """The only test that proves the SERVER is protected.
 
-    Marked integration because it needs network and gh auth; a local commit
-    cannot weaken a server-side ruleset, so gating every commit on this would
-    block offline work for no benefit.
+    ON A RUNNER, MISSING CREDENTIALS ARE A FAILURE. The environment promised a
+    token; its absence means the workflow is misconfigured, and skipping would
+    leave a permanently green job that verifies nothing.
+
+    ON A WORKSTATION they are a skip, because nothing promised them -- and the
+    skip is loud rather than silent: pytest's -ra reports the reason on every
+    run, so a laptop that has quietly stopped being able to check this says so.
     """
-    assert ruleset_violations(fetch_ruleset()) == []
+    try:
+        document = fetch_ruleset()
+    except NotAuthenticatedError as error:
+        if credentials_are_promised():
+            pytest.fail(f"CI must supply gh credentials to this gate.\n{error}")
+        pytest.skip(str(error))
+
+    assert ruleset_violations(document) == []

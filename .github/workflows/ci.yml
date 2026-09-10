@@ -12,8 +12,12 @@ on:
     branches: [main, develop]
 
 # LEAST PRIVILEGE AT THE WORKFLOW LEVEL. The default token is far broader than a
-# gate needs. This workflow reads code and nothing else; it publishes nothing,
-# comments on nothing, and writes no packages.
+# gate needs, and GitHub's own guidance is to default GITHUB_TOKEN to read
+# access only. This workflow reads code and repository metadata; it publishes
+# nothing, comments on nothing, and writes no packages.
+#
+# contents: read IS SUFFICIENT FOR READING RULESETS, so the integration test
+# that verifies branch protection needs no additional scope.
 permissions:
   contents: read
 
@@ -36,13 +40,11 @@ jobs:
       # PINNED TO A COMMIT SHA, NOT A TAG. A tag is mutable -- the owner can
       # repoint v5 at any commit, so the workflow would run whatever code sits
       # behind that tag today. The comment carries the version so the pin stays
-      # readable; the SHA is what executes. Update deliberately via `zizmor
-      # --fix` or by re-resolving the tag, never by editing the comment.
-      # policies/repo/repo.rego R006 enforces the SHA form.
+      # readable; the SHA is what executes. R006 enforces the SHA form.
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with:
           # FULL HISTORY IS REQUIRED, NOT A PREFERENCE. The default is a shallow
-          # clone of depth 1, and a secret scan walks every commit. Against a
+          # clone of depth 1, and the secret scan walks every commit. Against a
           # shallow clone it reports clean while checking almost nothing -- a
           # gate that manufactures confidence, which is worse than no gate.
           fetch-depth: 0
@@ -62,8 +64,7 @@ jobs:
       # NOT A SCHEDULED update-flake-lock WORKFLOW. GitHub disables scheduled
       # workflows after 60 days without repository activity, and a successful
       # scheduled run does not itself count as activity. A refresh that silently
-      # stops leaves a lock rotting while looking maintained. Tying the check to
-      # every PR means it cannot stop without someone noticing.
+      # stops leaves a lock rotting while looking maintained.
       - uses: DeterminateSystems/flake-checker-action@fca8ac4a1791a59f5599f06b8dcf4c5bd7c8d53f
         with:
           fail-mode: true
@@ -76,10 +77,9 @@ jobs:
       #
       # THE TAGGED ACTION, NOT nix-installer-action@main. That one uses the most
       # recent Determinate Nix even when the action itself is pinned, so a SHA
-      # pin would describe the wrapper while the Nix underneath moved.
-      #
-      # NO magic-nix-cache-action. Its cache authenticates against FlakeHub,
-      # whose hosted cache no longer has a useful free tier.
+      # pin would describe the wrapper while the Nix underneath moved. This also
+      # pins the one executable gates.py cannot get from the flake, since nix is
+      # what BUILDS the flake's devShell.
       - uses: DeterminateSystems/determinate-nix-action@021c8a1bd3570eb21f5c20a054812b0c4d9ca614 # v3.22.3
 
       # mise IS STILL NEEDED, BUT IT NO LONGER INSTALLS TOOLS. `mise run check`
@@ -92,25 +92,23 @@ jobs:
       # ONE COMMAND. ci.yml deliberately restates NOTHING about what `check`
       # contains.
       #
-      # Listing lint, types and test as separate steps would be a second copy of
-      # a list that lives in mise.toml, and it drifts the moment a gate is added
-      # to one and forgotten in the other. R008 enforces that absence.
+      # THERE IS NO SEPARATE check:ruleset STEP ANY MORE, and its removal is the
+      # point of this change. Branch protection is now verified by
+      # tests/test_ruleset.py under the `test (integration)` gate, which lives in
+      # gates.py alongside every other check. A second step here would be a
+      # second place the gate list is written down -- exactly what R008 forbids.
+      #
+      # GH_TOKEN IS WHAT MAKES THAT WORK, AND ITS ABSENCE IS WHY THIS FAILED.
+      # `gh` finds credentials in a keyring on a laptop and in this variable on
+      # a runner. Without it the integration test died with exit 4 -- gh's code
+      # for "not authenticated" -- which reads like a missing ruleset and is
+      # not. Absorbing a gh-dependent check into a step that had no token is the
+      # same regression scoping per-job permissions produces elsewhere.
+      #
+      # AT THE STEP, NOT THE WORKFLOW. Step-level scoping is the least-privilege
+      # placement: only the step that shells out to gh sees the credential, and
+      # a future step needing a different token cannot silently inherit this one.
       - name: mise run check
         run: mise run check
-
-      # A SEPARATE STEP, NOT PART OF `check`, AND THAT IS THE DESIGN.
-      #
-      # It needs network and gh auth. A local commit cannot weaken a server-side
-      # ruleset, so making every commit depend on both would block offline work
-      # for no benefit -- and a gate that fails on a plane is one people bypass.
-      #
-      # NOT A SCHEDULED WORKFLOW either: GitHub disables those after 60 days of
-      # repository inactivity, and a security check that silently stops is worse
-      # than none. Tying it to CI removes the cron dependency.
-      #
-      # RUNS AFTER `check` because if the code is broken, the protection status
-      # is the less urgent of the two findings.
-      - name: mise run check:ruleset
-        run: mise run check:ruleset
         env:
           GH_TOKEN: ${{ github.token }}

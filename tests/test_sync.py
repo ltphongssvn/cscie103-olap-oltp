@@ -13,8 +13,33 @@ which is what makes it printable and testable without touching a repository.
 
 from pathlib import Path
 
+from cscie103_olap_oltp.git.env import git as _run_git
 from cscie103_olap_oltp.git.state import Branch, RepositoryState, Worktree
-from cscie103_olap_oltp.git.sync import plan_cleanup
+from cscie103_olap_oltp.git.sync import (
+    advance_integration_branch,
+    is_linked_worktree,
+    plan_cleanup,
+)
+
+
+def _git(*args: str, cwd: Path) -> None:
+    """A git call that cannot be redirected by an inherited GIT_DIR.
+
+    Routed through the project's own helper, which scrubs git's routing
+    variables. A fixture that skipped this once committed to the real
+    repository -- see tests/conftest.py.
+    """
+    result = _run_git(*args, cwd=cwd)
+    assert result.returncode == 0, result.stderr
+
+
+def _rev(root: Path, ref: str) -> str:
+    return _run_git("rev-parse", ref, cwd=root).stdout.strip()
+
+
+def _current_branch(root: Path) -> str:
+    return _run_git("rev-parse", "--abbrev-ref", "HEAD", cwd=root).stdout.strip()
+
 
 # PATHS THAT CANNOT EXIST AND ARE NEVER OPENED. These populate fields the plan
 # reads; nothing here touches a filesystem. Deliberately not under /tmp, because
@@ -101,3 +126,59 @@ def test_every_blocked_branch_can_explain_itself() -> None:
     )
     for branch in plan.blocked:
         assert branch.blocked_because
+
+
+def test_a_linked_worktree_is_recognised(tmp_path: Path) -> None:
+    """THE DISTINCTION sync DID NOT MAKE, AND IT COST A CHECKOUT.
+
+    `sync` switched to develop unconditionally. Run from a linked worktree that
+    is exactly wrong: develop becomes checked out THERE, the main worktree stops
+    holding it, and the branch being cleaned up is the one now occupied -- so
+    the delete fails after the pull has already succeeded. Observed exactly
+    that, in this repository.
+
+    GIT'S OWN ANSWER IS A COMPARISON, NOT A HEURISTIC: inside a linked worktree
+    $GIT_DIR points at a private directory while $GIT_COMMON_DIR points back at
+    the main repository. Differing paths mean linked.
+    """
+    main = tmp_path / "main"
+    main.mkdir()
+    _git("init", "-q", "-b", "main", cwd=main)
+    _git("config", "user.email", "test@example.invalid", cwd=main)
+    _git("config", "user.name", "Test", cwd=main)
+    _git("commit", "-q", "--allow-empty", "-m", "initial", cwd=main)
+
+    linked = tmp_path / "linked"
+    _git("worktree", "add", "-q", "-b", "feature/z", str(linked), cwd=main)
+
+    assert not is_linked_worktree(main)
+    assert is_linked_worktree(linked)
+
+
+def test_the_integration_branch_is_advanced_without_being_checked_out(
+    tmp_path: Path,
+) -> None:
+    """FAST-FORWARD THE REF, DO NOT OCCUPY IT.
+
+    In a bare-parent layout develop has no home worktree by design: the main
+    worktree is the stable reference and every branch lives in a linked one.
+    Advancing the ref directly is what canonical cleanup tools do for bare
+    repositories, and it leaves develop free for whoever needs it next.
+    """
+    origin = tmp_path / "origin"
+    origin.mkdir()
+    _git("init", "-q", "-b", "develop", cwd=origin)
+    _git("config", "user.email", "test@example.invalid", cwd=origin)
+    _git("config", "user.name", "Test", cwd=origin)
+    _git("commit", "-q", "--allow-empty", "-m", "one", cwd=origin)
+
+    clone = tmp_path / "clone"
+    _git("clone", "-q", str(origin), str(clone), cwd=tmp_path)
+    _git("switch", "-q", "-c", "feature/work", cwd=clone)
+
+    _git("commit", "-q", "--allow-empty", "-m", "two", cwd=origin)
+    advance_integration_branch(clone)
+
+    # develop moved, and feature/work is still what is checked out.
+    assert _rev(clone, "develop") == _rev(origin, "develop")
+    assert _current_branch(clone) == "feature/work"

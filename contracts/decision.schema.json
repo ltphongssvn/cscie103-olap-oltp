@@ -1,0 +1,167 @@
+{
+  "$defs": {
+    "Evidence": {
+      "additionalProperties": false,
+      "description": "One observation. A fact, not a judgement.\n\nDeliberately says nothing about whether the observation is good. The same\nevidence evaluated against a stricter policy tomorrow yields a different\nverdict, and that is the property that makes evidence worth keeping.",
+      "properties": {
+        "observed": {
+          "additionalProperties": true,
+          "description": "What was measured, as structured data",
+          "title": "Observed",
+          "type": "object"
+        },
+        "observed_at": {
+          "format": "date-time",
+          "title": "Observed At",
+          "type": "string"
+        },
+        "rule_id": {
+          "description": "Stable id of the rule this pertains to",
+          "minLength": 1,
+          "title": "Rule Id",
+          "type": "string"
+        },
+        "source": {
+          "description": "What produced this observation",
+          "minLength": 1,
+          "title": "Source",
+          "type": "string"
+        }
+      },
+      "required": [
+        "rule_id",
+        "observed",
+        "source"
+      ],
+      "title": "Evidence",
+      "type": "object"
+    },
+    "Verdict": {
+      "additionalProperties": false,
+      "description": "What an evaluator concluded, against a named policy revision.\n\npolicy_revision IS NOT DECORATION. Six months later the question is never\n\"did it pass\" but \"what did it check when it passed\". A verdict that cannot\nname the rules that produced it is not auditable, and a digest is the only\nanswer that cannot drift from the files it describes.",
+      "properties": {
+        "contract": {
+          "description": "What was judged, e.g. 'repository/v1'",
+          "minLength": 1,
+          "title": "Contract",
+          "type": "string"
+        },
+        "evaluated_at": {
+          "format": "date-time",
+          "title": "Evaluated At",
+          "type": "string"
+        },
+        "evidence": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/Evidence"
+          },
+          "title": "Evidence",
+          "type": "array"
+        },
+        "outcome": {
+          "enum": [
+            "pass",
+            "fail",
+            "unknown"
+          ],
+          "title": "Outcome",
+          "type": "string"
+        },
+        "policy_revision": {
+          "description": "SHA-256 over the policy sources that produced this verdict",
+          "maxLength": 64,
+          "minLength": 64,
+          "title": "Policy Revision",
+          "type": "string"
+        },
+        "reason_code": {
+          "description": "Why, in machine-readable form",
+          "minLength": 1,
+          "title": "Reason Code",
+          "type": "string"
+        },
+        "violations": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/Violation"
+          },
+          "title": "Violations",
+          "type": "array"
+        }
+      },
+      "required": [
+        "contract",
+        "outcome",
+        "reason_code",
+        "policy_revision"
+      ],
+      "title": "Verdict",
+      "type": "object"
+    },
+    "Violation": {
+      "additionalProperties": false,
+      "description": "A rule that was not satisfied, explained by machine-readable fields.\n\nA message alone is prose: it cannot be counted, grouped, or trended. The id\nand reason_code are what make Violations as Data true rather than\naspirational.",
+      "properties": {
+        "id": {
+          "minLength": 1,
+          "title": "Id",
+          "type": "string"
+        },
+        "message": {
+          "minLength": 1,
+          "title": "Message",
+          "type": "string"
+        },
+        "reason_code": {
+          "minLength": 1,
+          "title": "Reason Code",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "reason_code",
+        "message"
+      ],
+      "title": "Violation",
+      "type": "object"
+    }
+  },
+  "$id": "https://github.com/ltphongssvn/cscie103-olap-oltp/contracts/decision.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "One enforcement decision: the verdict that produced it, the action taken, and when. Generated from the pydantic models -- edit those, then run `mise run schema:generate`.",
+  "properties": {
+    "action": {
+      "enum": [
+        "publish",
+        "quarantine",
+        "halt",
+        "waive"
+      ],
+      "title": "Action",
+      "type": "string"
+    },
+    "decided_at": {
+      "format": "date-time",
+      "title": "Decided At",
+      "type": "string"
+    },
+    "reason_code": {
+      "minLength": 1,
+      "title": "Reason Code",
+      "type": "string"
+    },
+    "verdict": {
+      "$ref": "#/$defs/Verdict"
+    }
+  },
+  "required": [
+    "verdict",
+    "action",
+    "reason_code"
+  ],
+  "title": "Decision",
+  "type": "object"
+}

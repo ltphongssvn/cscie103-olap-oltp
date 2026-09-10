@@ -27,10 +27,19 @@ requires-python = "==3.12.3"
 dependencies = [
   "pydantic>=2.10",
   "pandera>=0.32",
-  # AMBIENT PROCESS STATE, MADE A VALIDATED SNAPSHOT. Moved here from the dev
-  # group when src/cscie103_olap_oltp/environment.py started shipping: a runtime
-  # module importing a dev-only dependency works on a developer machine and
-  # fails wherever the package is installed without dev extras.
+  # AMBIENT PROCESS STATE, MADE A VALIDATED SNAPSHOT.
+  #
+  # THE PACKAGE ITSELF WAS MISSING HERE UNTIL NOW, WHICH IS WORTH RECORDING: an
+  # earlier edit moved the JUSTIFICATION into this list and left the requirement
+  # in the dev group. src/cscie103_olap_oltp/environment.py imports it at
+  # runtime, so any install without dev extras would fail on import -- and no
+  # gate could notice, because dev extras are always present locally and in CI.
+  "pydantic-settings>=2.6",
+  # THE VALIDATOR, BECAUSE PYDANTIC IS NOT ONE. Pydantic GENERATES JSON Schema
+  # and does nothing to validate a schema against its metaschema or an instance
+  # against a schema. Without this the published contract would be a document
+  # nobody checks rather than something that can refuse a malformed artifact.
+  "jsonschema>=4.23",
 ]
 
 [dependency-groups]
@@ -38,11 +47,13 @@ dev = [
   "mypy>=1.14",
   "pytest>=8.3",
   "ruff>=0.9",
-  # AMBIENT PROCESS STATE, MADE A VALIDATED SNAPSHOT. Environment variables
-  # decide which workspace a command reaches and whether a deploy runs at all.
-  # SecretStr also renders as ********** when printed, which is a stronger
-  # guarantee than remembering not to print a credential.
-  "pydantic-settings>=2.6",
+  # REAL STUBS EXIST, SO USE THEM RATHER THAN SUPPRESSING THE IMPORT.
+  #
+  # The documented order is: check typeshed and PyPI for a stub package BEFORE
+  # suppressing. The shortcut -- another ignore_missing_imports entry -- would
+  # switch off type checking for every jsonschema call, and those calls are what
+  # enforce the published artifact contract.
+  "types-jsonschema>=4.23",
   # PII DETECTION BY CONTENT, NOT BY PATH.
   #
   # The structural controls -- .gitignore rules and the hygiene gate's extension
@@ -130,6 +141,14 @@ exclude = ["notebooks/.*"]
 #                       rule ends up dead while its tests still pass.
 warn_unused_configs = true
 warn_unreachable = true
+# THE GUARD FOR THE SUPPRESSIONS THAT REMAIN.
+#
+# ignore_missing_imports silences the IMPORT, but every value from that library
+# then becomes Any -- and an Any flowing into one of our own signatures makes
+# that function unchecked without anything saying so. This is the documented
+# protection against exactly that consequence, and it applies to the four
+# libraries below that genuinely ship no stubs.
+disallow_any_unimported = true
 enable_error_code = [
   "ignore-without-code",
   "possibly-undefined",

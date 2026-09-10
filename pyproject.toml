@@ -6,7 +6,8 @@ description = "OLTP (ER/3NF) to OLAP (dimensional) data platform, as code and as
 # MUST MATCH .python-version AND THE BUNDLE'S environment_version.
 # Spark Connect requires the client and server to share a Python MINOR version;
 # a mismatch surfaces as "Python versions in the Spark Connect client and server
-# are different" when a UDF dies, not when the change was made.
+# are different" when a UDF dies, not when the change was made. The env-parity
+# gate enforces the link.
 requires-python = "==3.12.3"
 
 # CONTRACT-FIRST, AND THESE ARE RUNTIME DEPENDENCIES RATHER THAN DEV TOOLS,
@@ -35,10 +36,35 @@ dev = [
   "ruff>=0.9",
   # AMBIENT PROCESS STATE, MADE A VALIDATED SNAPSHOT. Environment variables
   # decide which workspace a command reaches and whether a deploy runs at all.
-  # Reading os.environ where it happens to be needed puts that boundary nowhere.
   # SecretStr also renders as ********** when printed, which is a stronger
   # guarantee than remembering not to print a credential.
   "pydantic-settings>=2.6",
+  # PII DETECTION BY CONTENT, NOT BY PATH.
+  #
+  # The structural controls -- .gitignore rules and the hygiene gate's extension
+  # checks -- are proxies. They catch the realistic mistake and miss a data file
+  # placed anywhere unexpected. This reads what is IN the file.
+  #
+  # The gap is not hypothetical: .gitignore excludes *.parquet and *.csv, while
+  # an HTML export of an executed notebook carries the same names, birth dates
+  # and salaries in its cell outputs and matches no rule at all.
+  #
+  # THE PROJECT LIVES UNDER data-privacy-stack/presidio NOW, not
+  # microsoft/presidio. Same package name on PyPI.
+  #
+  # NOT presidio-cli, the obvious choice: it supports Python 3.8-3.10 and this
+  # project is pinned to 3.12.3.
+  "presidio-analyzer>=2.2.364",
+  # en_core_web_sm, NOT the documented en_core_web_lg. The large model is ~560MB
+  # against ~12MB, and this scans a repository that should contain no PII at all
+  # -- recall on obvious entities is the requirement, not subtle disambiguation.
+  #
+  # PINNED BY URL rather than fetched with `spacy download`, so uv locks it like
+  # any other dependency. A download at install time is a network call no
+  # lockfile records, which is the reproducibility hole flake.lock and uv.lock
+  # exist to close. AnalyzerEngine() with no arguments will otherwise DOWNLOAD
+  # the large model on first run, ignoring whatever was pinned.
+  "en_core_web_sm @ https://github.com/explosion/spacy-models/releases/download/en_core_web_sm-3.8.0/en_core_web_sm-3.8.0-py3-none-any.whl",
 ]
 
 [build-system]
@@ -46,10 +72,7 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 # SRC LAYOUT, DECLARED. Tests import the INSTALLED package, so a test exercises
-# what ships rather than what happens to be on sys.path. The sibling project
-# records `pythonpath = ["scripts"]` as known debt for exactly this reason; this
-# repo starts with the layout the 2026 guidance prefers instead of migrating to
-# it later.
+# what ships rather than what happens to be on sys.path.
 [tool.hatch.build.targets.wheel]
 packages = ["src/cscie103_olap_oltp"]
 
@@ -110,11 +133,12 @@ enable_error_code = [
   "truthy-bool",
 ]
 
-# pandera and pyspark ship incomplete stubs. Without this, strict mode reports
-# an error per import for libraries whose types are not this project's concern
-# -- and a blanket ignore_errors would hide real problems in our own code.
+# pandera, pyspark, presidio and spacy ship incomplete or absent stubs. Without
+# this, strict mode reports an error per import for libraries whose types are not
+# this project's concern -- and a blanket ignore_errors would hide real problems
+# in our own code.
 [[tool.mypy.overrides]]
-module = ["pandera.*", "pyspark.*"]
+module = ["pandera.*", "pyspark.*", "presidio_analyzer.*", "spacy.*"]
 ignore_missing_imports = true
 
 [tool.pytest.ini_options]
@@ -122,7 +146,7 @@ testpaths = ["tests"]
 
 # MARKERS ARE REGISTERED, AND UNREGISTERED ONES ARE AN ERROR.
 markers = [
-  "integration: requires network and Databricks credentials; excluded from the default run",
+  "integration: requires network and credentials; excluded from the default run",
   "spark: requires a local or remote Spark session; slower than a unit test",
 ]
 

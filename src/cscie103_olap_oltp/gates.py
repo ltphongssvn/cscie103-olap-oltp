@@ -5,9 +5,9 @@ THE PROBLEM THIS REPLACES
 `check` chained gates with `mise run lint && mise run types && ...` under
 `set -euo pipefail`, so the first failure ended the run. That produces
 fix-one, re-run, discover-the-next: a treadmill built into the gate itself. It
-hid real findings during this project's own construction -- five mypy errors
-were invisible until lint passed, and four ruff errors were invisible until the
-write before that.
+hid real findings during this project's own construction repeatedly -- most
+recently four separate defects in one bundle change, which arrived together
+instead of over four cycles.
 
 Worse, a gate whose result is never printed is indistinguishable from one that
 passed, so a chain can quietly under-report what it checked.
@@ -104,6 +104,34 @@ GATES: tuple[Gate, ...] = (
         name="repo hygiene",
         command=("uv", "run", "python", "-m", "cscie103_olap_oltp.hygiene"),
     ),
+    # PII BY CONTENT, WHERE THE OTHER TWO CHECK FORM AND PATH.
+    #
+    # .gitignore filters by FORMAT and the hygiene gate by PATH; both are
+    # proxies for a rule about CONTENT. An HTML export of an executed notebook
+    # carries names and salaries in its cell outputs and matches no rule at all.
+    #
+    # Offline: the recognizers are regex plus dictionary and checksum, and the
+    # spaCy model is pinned in the lockfile rather than downloaded per run.
+    Gate(name="pii", command=("uv", "run", "python", "-m", "cscie103_olap_oltp.pii")),
+    # THE INTERPRETER PARITY GATE. Compares .python-version against the version
+    # the BUNDLE declares, which needs the CLI to resolve -- hence network.
+    #
+    # The failure it prevents is a UDF dying with "Python versions in the Spark
+    # Connect client and server are different", at execution time, far from the
+    # change that caused it.
+    Gate(
+        name="env parity",
+        command=("uv", "run", "python", "-m", "cscie103_olap_oltp.databricks", "env-parity"),
+        needs_network=True,
+    ),
+    # PREREQUISITES: what a deploy depends on that the bundle does not manage.
+    # Without this a missing dependency surfaces as an API error naming the
+    # symptom rather than the cause.
+    Gate(
+        name="prereqs",
+        command=("uv", "run", "python", "-m", "cscie103_olap_oltp.databricks", "prereqs"),
+        needs_network=True,
+    ),
     # FULL HISTORY, NOT THE WORKING TREE. A pre-commit hook only ever sees the
     # incoming change, so anything committed before hooks existed -- or pushed
     # with --no-verify -- has never been scanned.
@@ -111,9 +139,6 @@ GATES: tuple[Gate, ...] = (
     # --redact IS NOT COSMETIC. Without it a finding prints the credential it
     # found, into a CI log that is retained and often world-readable. A scanner
     # that leaks what it detects has made the exposure worse.
-    #
-    # betterleaks rather than gitleaks: same author, MIT, drop-in, and gitleaks
-    # now receives security patches only.
     Gate(name="secret scan", command=("betterleaks", "git", "--redact", "--no-banner")),
     # osv-scanner reads uv.lock; the vulnerability database ships with the
     # scanner rather than being fetched per run, so this is offline.
@@ -124,17 +149,15 @@ GATES: tuple[Gate, ...] = (
     # THE INTEGRATION TESTS RAN NOWHERE UNTIL THIS LINE. They are deselected
     # from the default pytest run by design, so a test written and left there is
     # a test that exists and never executes -- worse than no test, because it
-    # looks like coverage. Marked network because that is precisely why they are
-    # deselected.
+    # looks like coverage.
     Gate(
         name="test (integration)",
         command=("uv", "run", "pytest", "-m", "integration"),
         needs_network=True,
     ),
     # THE FLAKE'S THREE-PLATFORM PROMISE WAS NEVER VERIFIED BY THE GATE.
-    # `nix:flake-check` existed as a task nothing called. A package present on
-    # Darwin but absent on Linux passes locally and breaks on the runner.
-    # Network because evaluation fetches the locked nixpkgs.
+    # A package present on Darwin but absent on Linux passes locally and breaks
+    # on the runner. Network because evaluation fetches the locked nixpkgs.
     Gate(
         name="nix flake",
         command=("nix", "flake", "check", "--no-build", "--all-systems"),

@@ -155,3 +155,72 @@ def test_blocked_excludes_protected_branches(tmp_path: Path) -> None:
     root = _repo(tmp_path)
     state = gather(root)
     assert all(not branch.is_protected for branch in state.blocked)
+
+
+def _bare_layout(tmp_path: Path) -> tuple[Path, Path]:
+    """A bare parent with one linked worktree -- this project's real layout.
+
+    THE FIXTURE THAT DID NOT EXIST, WHICH IS WHY THE BUG SHIPPED. Every earlier
+    fixture built a normal clone, so `gather` was never asked about a bare
+    entry -- and the code ran `git status` in it, which a repository with no
+    working tree cannot answer.
+    """
+    bare = tmp_path / "parent.git"
+    _run("git", "init", "-q", "--bare", "-b", "main", str(bare), cwd=tmp_path)
+
+    seed = tmp_path / "seed"
+    _run("git", "clone", "-q", str(bare), str(seed), cwd=tmp_path)
+    _run("git", "config", "user.email", "test@example.invalid", cwd=seed)
+    _run("git", "config", "user.name", "Test", cwd=seed)
+    _run("git", "commit", "-q", "--allow-empty", "-m", "initial", cwd=seed)
+    _run("git", "push", "-q", "origin", "main", cwd=seed)
+    _run("git", "branch", "develop", cwd=seed)
+    _run("git", "push", "-q", "origin", "develop", cwd=seed)
+
+    linked = tmp_path / "linked"
+    _run("git", "worktree", "add", "-q", str(linked), "develop", cwd=bare)
+    return bare, linked
+
+
+def test_gather_survives_a_bare_parent_worktree(tmp_path: Path) -> None:
+    """THE FAILURE THAT BROKE sync AFTER A SUCCESSFUL MERGE.
+
+    `git worktree list` includes the bare parent, and the parser ran
+    `git status --porcelain -z` in every listed path. A bare repository has no
+    working tree, so that call fails -- and cleanup died reporting
+    "git status --porcelain -z failed" with no indication of which path or why.
+    """
+    bare, _ = _bare_layout(tmp_path)
+    state = gather(bare)
+    assert state.worktrees
+
+
+def test_the_bare_entry_is_identified(tmp_path: Path) -> None:
+    """GIT SUPPLIES THE MARKER; NOTHING HAS TO BE INFERRED FROM A PATH.
+
+    The porcelain format lists boolean attributes as a label only, present if
+    and only if true -- so the bare entry carries `bare` and emits no HEAD or
+    branch line at all.
+    """
+    bare, _ = _bare_layout(tmp_path)
+    state = gather(bare)
+    assert state.worktrees[0].is_bare
+    assert state.worktrees[0].branch is None
+
+
+def test_a_bare_worktree_is_never_dirty(tmp_path: Path) -> None:
+    """DIRTINESS IS MEANINGLESS WITHOUT A WORKING TREE.
+
+    Reporting it as dirty would block cleanup forever; reporting it as clean is
+    the only truthful answer available.
+    """
+    bare, _ = _bare_layout(tmp_path)
+    assert not gather(bare).worktrees[0].is_dirty
+
+
+def test_the_linked_worktree_is_still_observed(tmp_path: Path) -> None:
+    """SKIPPING THE BARE ENTRY MUST NOT SKIP THE REAL ONES."""
+    bare, linked = _bare_layout(tmp_path)
+    state = gather(bare)
+    paths = {worktree.path for worktree in state.worktrees}
+    assert linked.resolve() in {path.resolve() for path in paths}

@@ -191,6 +191,17 @@ description = "Authenticate this machine to Databricks (interactive, one-time)"
 # code runs in both, with no heuristic to get wrong.
 run = "databricks auth login --host https://dbc-c7e8aa56-e393.cloud.databricks.com --profile DEFAULT"
 
+[tasks."env:describe"]
+description = "Report which environment variables are set, never their values"
+# THE OTHER HALF OF `auth:describe`. That one reports what the Databricks CLI
+# resolved; this reports the variables THIS repository declares -- which is
+# where a missing GH_TOKEN or a hostname without a scheme actually shows up.
+#
+# PRESENCE, NEVER VALUES. A diagnostic that prints a secret is the leak it was
+# written to prevent, and it is precisely the output someone pastes into an
+# issue while asking for help.
+run = "uv run python -m cscie103_olap_oltp.environment"
+
 [tasks."auth:describe"]
 description = "Report which credentials the CLI resolved, and from where"
 run = "databricks auth describe"

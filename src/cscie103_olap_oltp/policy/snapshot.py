@@ -20,11 +20,12 @@ TWO DESIGN CONSTRAINTS, BOTH LEARNED FROM FAIL-OPEN BUGS:
 
 from __future__ import annotations
 
-import os
 import subprocess
 import tomllib
 from pathlib import Path
 from typing import Any
+
+from cscie103_olap_oltp.environment import current
 
 # src/cscie103_olap_oltp/policy/snapshot.py -> up four to the repository root.
 REPO_ROOT = Path(__file__).resolve().parents[3]
@@ -198,7 +199,7 @@ def git_facts(root: Path | None = None) -> dict[str, Any]:
     #
     # CI IS SET BY EVERY MAJOR RUNNER, the same signal the live gates use to
     # decide whether missing credentials are a skip or a failure.
-    ephemeral = os.environ.get("CI", "").lower() in {"true", "1"}
+    ephemeral = current().ci
 
     return {
         "origin_is_ssh": is_ssh,

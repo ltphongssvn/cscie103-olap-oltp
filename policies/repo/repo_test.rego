@@ -57,6 +57,7 @@ compliant := {
 		"pre_commit_guards_branch": true,
 	},
 	"python": {"dotfile_version": "3.12.3", "pyproject_version": "3.12.3"},
+	"git": {"origin_is_ssh": true, "origin_host": "example.test"},
 	"pytest": {
 		"addopts": ["--strict-markers", "--strict-config", "-ra"],
 		"xfail_strict": true,
@@ -286,4 +287,37 @@ test_every_finding_carries_id_and_reason_code if {
 		f.reason_code != ""
 		f.message != ""
 	}
+}
+
+# --- R015 ---------------------------------------------------------------------
+
+test_r015_denies_https_remote if {
+	# THE FORM actions/checkout CONFIGURES, and the form the Lightning Studio's
+	# first clone acquired while the sibling project sat on SSH. A Python
+	# assertion held that convention and nothing refused when it broke.
+	cfg := mutate("git", {"origin_is_ssh": false})
+	ids := {f.id | some f in repo.deny} with input as cfg
+	"R015" in ids
+}
+
+test_r015_denies_missing_origin if {
+	# ABSENCE IS NOT A PASS. A clone with no remote cannot satisfy the rule, so
+	# it refuses rather than evaluating against undefined.
+	cfg := mutate("git", {"origin_is_ssh": false, "origin_host": ""})
+	ids := {f.id | some f in repo.deny} with input as cfg
+	"R015" in ids
+}
+
+test_r015_silent_when_remote_is_ssh if {
+	ids := {f.id | some f in repo.deny} with input as compliant
+	not "R015" in ids
+}
+
+test_r015_names_the_host_it_found if {
+	# A refusal saying only "not SSH" sends the reader back to a terminal to ask
+	# git what the remote actually is.
+	cfg := mutate("git", {"origin_is_ssh": false})
+	messages := {f.message | some f in repo.deny; f.id == "R015"} with input as cfg
+	some message in messages
+	contains(message, "example.test")
 }

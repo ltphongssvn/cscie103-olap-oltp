@@ -18,6 +18,7 @@ import pytest
 from cscie103_olap_oltp.policy.snapshot import (
     REPO_ROOT,
     build_snapshot,
+    git_facts,
     lefthook_facts,
     mise_facts,
     pytest_facts,
@@ -108,7 +109,7 @@ def test_snapshot_has_every_section_the_policy_reads() -> None:
     polarity. Neither is a gate.
     """
     snapshot = build_snapshot(REPO_ROOT)
-    assert set(snapshot) == {"mise", "workflow", "lefthook", "python", "pytest"}
+    assert set(snapshot) == {"mise", "workflow", "lefthook", "python", "pytest", "git"}
 
 
 def test_missing_file_raises_rather_than_returning_empty() -> None:
@@ -120,3 +121,24 @@ def test_missing_file_raises_rather_than_returning_empty() -> None:
     """
     with pytest.raises(FileNotFoundError):
         mise_facts(Path("/nonexistent/mise.toml"))
+
+
+def test_git_facts_report_the_remote_transport() -> None:
+    """THE POLICY CAN ONLY JUDGE FACTS THAT ARE COLLECTED.
+
+    SSH is the fleet-wide transport, and until now that was enforced by a Python
+    assertion -- which makes it a convention rather than a rule. Policy needs the
+    fact in the snapshot before it can refuse.
+    """
+    facts = git_facts()
+    assert "origin_is_ssh" in facts
+    assert isinstance(facts["origin_is_ssh"], bool)
+
+
+def test_git_facts_report_the_host() -> None:
+    """Carried so a denial can NAME what it found.
+
+    A refusal that says "not SSH" without saying what the remote actually is
+    sends the reader back to the terminal to find out.
+    """
+    assert "origin_host" in git_facts()

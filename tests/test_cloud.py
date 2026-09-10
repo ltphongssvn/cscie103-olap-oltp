@@ -186,3 +186,19 @@ def test_no_script_writes_a_credential_to_the_studio() -> None:
         assert "GH_TOKEN" not in script
         assert "credential" not in script
         assert "id_ed25519" not in script
+
+
+def test_the_clone_script_reconciles_the_remote_url() -> None:
+    """SELF-HEALING, BECAUSE THIS DRIFTED IN PRACTICE.
+
+    R015 makes SSH a rule for THIS repository, but the Studio is a different
+    clone and no policy runs there. Its first clone was created before the
+    transport was decided and came up on HTTPS while the sibling project sat on
+    SSH -- a remote nobody chose.
+
+    Correcting it by hand would fix one machine and leave the next fresh clone
+    free to drift identically. Setting the URL on every run makes the rule
+    enforced rather than hoped for, and it is idempotent: on a correct clone it
+    changes nothing.
+    """
+    assert "remote set-url origin" in clone_script()

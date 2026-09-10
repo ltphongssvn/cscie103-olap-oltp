@@ -16,43 +16,20 @@ HOW THE REMOTE URL REACHED ITS THIRD DESIGN, BECAUSE BOTH FAILURES WERE REAL.
 
   1. HARDCODED. The PII gate refused the push: an SSH remote of the form
      user@host is structurally an email address, and the scanner cannot know it
-     is a git remote. The rule is to eliminate at source rather than allowlist,
-     since a suppressed finding makes the scanner decoration.
+     is a git remote. The rule is to eliminate at source rather than allowlist.
 
   2. PASSED THROUGH from `git remote get-url`. The literal went away and CI
      failed: actions/checkout configures origin over HTTPS, so the runner
-     derived HTTPS while the laptop derived SSH. Worse than a broken test, it
-     meant the transport the Studio received depended on which machine ran the
-     command.
+     derived HTTPS while the laptop derived SSH -- the transport the Studio
+     received depended on which machine ran the command.
 
   3. PARSED AND REBUILT, which is what this file does. The remote is decomposed
      into host, owner and repo -- accepting either form -- and the Studio's URL
      is CONSTRUCTED as SSH. Git remains the single source of truth for WHICH
      repository; this module decides the TRANSPORT, identically everywhere.
 
-That is the documented pattern for repository identity: parse a remote into its
-components and rebuild it in the form the caller needs, rather than depending on
-the form that happens to be configured.
-
-WHY SSH AT ALL, GIVEN THIS REPOSITORY IS PUBLIC
-
-HTTPS would need no credential for the pull direction. It is rejected for fleet
-consistency: the sibling project authenticates over SSH, and a fleet where each
-repository uses a different transport is one where nobody can predict what a
-given machine can reach.
-
-GitHub documents four options -- agent forwarding, HTTPS with OAuth tokens,
-deploy keys, machine users -- and agent forwarding is the one that needs no new
-keys, no key management, and stores NOTHING on the server, so a compromised
-Studio leaves no credential to hunt down and revoke. Its stated limitation, that
-a human must SSH in, is not one we have: sync is human-initiated by design.
-
-THE 2026 HARDENINGS ARE APPLIED, NOT ASSUMED
-  scoped     ForwardAgent is set per-invocation for one host, never globally --
-             a host you forward to can request signatures for any key the agent
-             holds.
-  short      every operation is one-shot and non-interactive, so the exposure
-             window is the length of a pull rather than a session left open.
+SSH IS ENFORCED BY POLICY, NOT BY THIS FILE. R015 in policies/repo/repo.rego
+denies a non-SSH origin, so the rule is refused rather than merely intended.
 """
 
 from __future__ import annotations
@@ -72,15 +49,13 @@ TEAMSPACE = "ltphongssvn/deploy-model-project"
 
 # ~/ltphongssvn RESOLVES INTO /teamspace/studios/this_studio, WHICH PERSISTS.
 # A Studio's ordinary home directory does not survive a restart, so a clone
-# placed outside /teamspace silently vanishes -- and the failure looks like the
-# clone never happened rather than like storage that was never persistent.
+# placed outside /teamspace silently vanishes.
 STUDIO_REPO_PATH = "~/ltphongssvn/cscie103-olap-oltp"
 
 INTEGRATION_BRANCH = "develop"
 
 # SPLIT FROM THE HOST DELIBERATELY. Written adjacent to a hostname this is an
-# email address to any scanner, and the PII gate is right to say so. Kept apart,
-# the SSH form is assembled at the one place that needs it.
+# email address to any scanner, and the PII gate is right to say so.
 SSH_USER = "git"
 
 # BOTH FORMS GIT ACCEPTS, and both appear in this project's own environments:
@@ -97,8 +72,7 @@ def parse_remote(url: str) -> tuple[str, str, str]:
 
     ACCEPTS EITHER FORM, because this project genuinely sees both: a laptop
     configures scp-style SSH and actions/checkout configures HTTPS. A parser
-    that handled only one would work on one machine and fail on the other --
-    which is precisely the bug this replaced.
+    handling only one would work on one machine and fail on the other.
 
     RAISES ON ANYTHING ELSE. A silent fallback would hand the Studio a URL
     pointing at something that is not this repository.
@@ -114,8 +88,7 @@ def studio_remote_url(origin: str) -> str:
     """The URL the Studio clones from: always SSH, whatever `origin` is.
 
     THIS IS WHERE THE TRANSPORT DECISION LIVES, and putting it in one function
-    is what makes it identical on every machine. The alternative -- letting the
-    ambient clone decide -- gave the Studio HTTPS from CI and SSH from a laptop.
+    is what makes it identical on every machine.
     """
     host, owner, repo = parse_remote(origin)
     return f"{SSH_USER}@{host}:{owner}/{repo}.git"
@@ -124,8 +97,7 @@ def studio_remote_url(origin: str) -> str:
 def origin_url() -> str:
     """What git says `origin` is, on whichever machine is asking.
 
-    ASKED OF GIT RATHER THAN DECLARED. The remote is a fact git already stores,
-    so a literal here would be a second copy able to disagree with
+    ASKED OF GIT RATHER THAN DECLARED, so a literal cannot disagree with
     `git remote -v`.
     """
     result = subprocess.run(
@@ -147,19 +119,41 @@ def ssh_command() -> list[str]:
     """The ssh invocation, with forwarding scoped to this host only.
 
     -T because nothing here needs a TTY: every script is piped in on stdin and
-    runs to completion. It also keeps the session non-interactive, which is what
-    bounds the exposure window.
+    runs to completion, which also bounds the exposure window of the forwarded
+    agent to the length of one operation.
     """
     return ["ssh", "-T", "-o", "ForwardAgent=yes", STUDIO_HOST, "bash", "-s"]
 
 
 def clone_script() -> str:
-    """Create the Studio's clone if it is absent. Idempotent.
+    r"""Create the Studio's clone if absent, and reconcile its remote. Idempotent.
 
-    A BOOTSTRAP THAT ONLY WORKS ONCE IS ONE NOBODY RE-RUNS, and a bootstrap
-    nobody re-runs cannot reconcile anything. Running this against a Studio that
-    already has the clone reports the fact and changes nothing.
+    THE STUDIO REWRITES SSH URLS TO HTTPS, AND THAT IS NOT OUR CONFIG.
+    Lightning's image ships a global `url.<https-prefix>.insteadOf` rule mapping
+    the GitHub SSH prefix onto HTTPS, then hands the result to a `gh` credential
+    helper. Inspect it with:
+
+        git config --show-origin --get-regexp 'url\..*'
+
+    That is why the first clone came up on HTTPS, and why `git remote set-url`
+    alone appeared to do nothing -- the value was stored and rewritten on read.
+
+    THE RULE IS NOT QUOTED VERBATIM HERE. It contains a user@host string that the
+    PII scanner correctly reads as an address, and this repository eliminates
+    findings at source rather than allowlisting them. The command above prints
+    the live rule, which is better than a copy that can go stale.
+
+    THE FIX IS SCOPED, NOT GLOBAL. Unsetting Lightning's rule with
+    `git config --global` would mutate a persistent machine that hosts other
+    projects, and the change would outlive this session with nothing to connect
+    it back to us.
+
+    GIT RESOLVES insteadOf BY LONGEST MATCH, so mapping the WHOLE URL to itself
+    outranks the shorter prefix rule above and the rewrite loses. The same
+    override is then written to the repository's LOCAL config, so fetch and push
+    never depend on ambient state again.
     """
+    url = studio_remote_url(origin_url())
     return f"""
 set -euo pipefail
 
@@ -168,15 +162,22 @@ mkdir -p ~/ltphongssvn
 if [ -d {STUDIO_REPO_PATH}/.git ]; then
   echo "ok      clone already present"
 else
-  git clone {studio_remote_url(origin_url())} {STUDIO_REPO_PATH}
+  git -c url."{url}".insteadOf="{url}" clone {url} {STUDIO_REPO_PATH}
   echo "created clone"
 fi
 
 cd {STUDIO_REPO_PATH}
 
+# RECONCILE, DO NOT MERELY CREATE. R015 requires SSH, and this drifted in
+# practice. Setting both on every run makes the rule enforced rather than hoped
+# for; on a correct clone it changes nothing.
+git config --local url."{url}".insteadOf "{url}"
+git remote set-url origin {url}
+echo "remote:  $(git remote get-url origin)"
+
 # A FRESH CLONE LANDS ON THE DEFAULT BRANCH, which is develop here, so the
-# switch is usually a no-op. The fallback covers the case where a local branch
-# of that name does not exist yet and has to be created from the remote.
+# switch is usually a no-op. The fallback covers a local branch that does not
+# exist yet and has to be created from the remote.
 if ! git switch {INTEGRATION_BRANCH} 2>/dev/null; then
   git switch -c {INTEGRATION_BRANCH} origin/{INTEGRATION_BRANCH}
 fi
@@ -190,10 +191,9 @@ def pull_script() -> str:
 
     --ff-only IS THE IMPORTANT FLAG. A merge on the Studio would create a commit
     that exists nowhere else -- a third head, which is precisely the drift this
-    design prevents. Fast-forward-only turns divergence into a loud failure.
+    design prevents.
 
-    --prune because branches deleted on merge otherwise linger forever, and
-    `git branch -a` stops meaning anything.
+    --prune because branches deleted on merge otherwise linger forever.
 
     THE RESULT IS A COMMIT HASH, NOT A SUCCESS MESSAGE. The question is whether
     three copies are the same, so the answer has to be comparable.
@@ -216,8 +216,7 @@ def run_on_studio(script: str) -> int:
     """Execute a script on the Studio, streaming its output.
 
     NOT capture_output. This is human-initiated and the output is the point -- a
-    clone takes a while, and a silent command that prints everything at the end
-    reads as a hang.
+    clone takes a while, and a silent command reads as a hang.
 
     S603 IS SUPPRESSED NARROWLY: the argument list comes from ssh_command(),
     built from module constants with nothing interpolated from user input.
@@ -253,9 +252,5 @@ if __name__ == "__main__":
 # agent it would push as YOU, with no way to tell afterwards which machine the
 # commit came from.
 #
-# If the Studio ever needs to author work, the honest answer is the GitFlow
-# everything else uses: a feature branch, a pull request, and the quality gate.
-#
-# TEAMSPACE is recorded for the day a task needs the Lightning CLI -- studio
-# start/stop, or cp for artifacts git should not carry. Sync itself needs only
-# ssh and git.
+# TEAMSPACE is recorded for the day a task needs the Lightning CLI. Sync itself
+# needs only ssh and git.

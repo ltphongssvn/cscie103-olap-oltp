@@ -14,20 +14,25 @@ TWO GATES LIVE HERE, AND THEY FAIL FOR DIFFERENT REASONS.
                Without this, a missing dependency surfaces as a deploy failure
                with an API error naming the symptom rather than the cause.
 
-HOW THE ISOLATION ASSERTION FOUND ITS INSTRUMENT, IN TWO WRONG STEPS.
+HOW THE ISOLATION ASSERTION FOUND ITS INSTRUMENT, IN THREE WRONG STEPS.
 
 First it searched the raw YAML for the sibling catalog's name, stripping lines
 starting with `#`. That failed against a correct file: a comment is not always a
 line beginning with a hash, and a `>-` block can contain anything.
 
-Then it searched the RESOLVED bundle on the reasoning that resolution strips
+Then it searched the RESOLVED bundle, on the reasoning that resolution strips
 comments. It does -- but a `comment:` FIELD is a deployed value, not prose, and
-the catalog's description named the sibling to explain the isolation. Failed
-again, still correctly.
+the catalog's description named the sibling to explain the isolation.
 
-The instrument that works asks a structural question: which catalog does each
-resource BIND to. catalog_name is the field that decides where an object lives;
-free text cannot be confused with it, and no amount of prose can defeat it.
+Then it asked structurally, comparing every catalog_name against the CATALOG
+RESOURCE REFERENCE -- and that was right until the catalog stopped being a
+bundle resource at all (databricks/cli#4513; see src/.../catalog.py). The
+reference resolved away, and the assertion described a design that no longer
+existed.
+
+The version below asks the question that survives all three: whatever the
+mechanism, does every object land in THIS project's catalog and not the
+sibling's. That is the property; the reference was only ever one way to get it.
 """
 
 import json
@@ -45,11 +50,6 @@ from cscie103_olap_oltp.databricks import (
 from cscie103_olap_oltp.policy.snapshot import REPO_ROOT
 
 CONTRACT_PATH = REPO_ROOT / "contracts" / "environment-versions.json"
-
-# WHAT THE CATALOG RESOURCE RESOLVES TO AT VALIDATE TIME. Resource
-# cross-references survive validation unresolved -- the CLI resolves them at
-# deploy, when the referenced object has an identity.
-CATALOG_REFERENCE = "${resources.catalogs.project.name}"
 
 
 def credentials_are_promised() -> bool:
@@ -116,8 +116,7 @@ def test_local_interpreter_matches_the_contract() -> None:
     """The real check, offline: .python-version against the mapping.
 
     Needs no CLI and no workspace, so it runs in the hermetic suite and on a
-    plane. The environment version is hardcoded here rather than resolved,
-    because resolving needs credentials and this assertion does not.
+    plane.
     """
     local = (REPO_ROOT / ".python-version").read_text(encoding="utf-8").strip()
     assert interpreter_drift("5", local, _contract()) is None
@@ -141,8 +140,7 @@ def test_the_bundle_resolves_without_deployer_identity() -> None:
 
     dev mode prefixes names with the deployer and deploys to a user-scoped path,
     so the same bundle resolves differently for a laptop and a service
-    principal. Nothing identity-bearing may appear in the fixture target's
-    output.
+    principal. Nothing identity-bearing may appear in the fixture output.
     """
     config = _resolved_or_skip()
     serialised = json.dumps(config)
@@ -153,21 +151,25 @@ def test_the_bundle_resolves_without_deployer_identity() -> None:
 
 
 @pytest.mark.integration
-def test_the_catalog_resource_is_this_projects_catalog() -> None:
-    """The one place a real catalog name appears in the resolved bundle."""
-    config = _resolved_or_skip()
-    assert config["resources"]["catalogs"]["project"]["name"] == PROJECT_CATALOG
-    assert config["resources"]["catalogs"]["project"]["name"] != SIBLING_CATALOG
+def test_the_bundle_declares_no_catalog_resource() -> None:
+    """THE CATALOG IS NOT THE BUNDLE'S TO CREATE ON THIS TIER.
+
+    Declaring one fails with "Metastore storage root URL does not exist" --
+    databricks/cli#4513, closed as not planned. It is created by
+    src/cscie103_olap_oltp/catalog.py instead, and if a catalogs block ever
+    reappears here every deploy will retry a create that cannot succeed.
+    """
+    assert "catalogs" not in _resolved_or_skip()["resources"]
 
 
 @pytest.mark.integration
-def test_every_resource_binds_to_this_projects_catalog() -> None:
-    """ISOLATION, ASKED STRUCTURALLY.
+def test_every_resource_lands_in_this_projects_catalog() -> None:
+    """ISOLATION, ASKED AS A PROPERTY RATHER THAN A MECHANISM.
 
-    catalog_name is the field that decides where an object lives. Every schema
-    and volume must bind to THIS project's catalog resource -- and going through
-    the resource reference rather than a variable is also what declares the
-    dependency, so the deploy cannot race the catalog's creation.
+    catalog_name is the field that decides where an object lives. Whether it
+    arrives through a variable or a resource reference is an implementation
+    detail that has already changed once; that every object lands in THIS
+    catalog and never the sibling's is the thing that must stay true.
     """
     resources = _resolved_or_skip()["resources"]
 
@@ -179,7 +181,8 @@ def test_every_resource_binds_to_this_projects_catalog() -> None:
 
     assert bindings, "no schemas or volumes declared; the assertion would be vacuous"
     for binding in bindings:
-        assert binding == CATALOG_REFERENCE
+        assert binding == PROJECT_CATALOG
+        assert binding != SIBLING_CATALOG
 
 
 @pytest.mark.integration
@@ -200,9 +203,10 @@ def test_schema_names_are_bare_in_the_resolved_bundle() -> None:
 def test_the_volume_references_the_schema_resource() -> None:
     """A resource reference declares an ordering; a variable reference does not.
 
-    Naming the same string via ${var.oltp_schema} would let the deploy race the
-    schema's creation. The reference is still unresolved at validate time, which
-    is exactly what proves it is a resource reference rather than a variable.
+    The schema IS still a bundle resource, so this dependency remains real --
+    naming the same string via ${var.oltp_schema} would let the deploy race the
+    schema's creation. The reference is unresolved at validate time, which is
+    exactly what proves it is a resource reference.
     """
     volume = _resolved_or_skip()["resources"]["volumes"]["raw"]
     assert volume["schema_name"] == "${resources.schemas.oltp.name}"

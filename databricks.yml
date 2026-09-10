@@ -7,9 +7,13 @@
 # projects. The boundaries that remain are the catalog and the bundle name, and
 # both are used here:
 #
-#   catalog      cscie103_olap_oltp   (sibling: cscie103_catalog, untouched)
+#   catalog      cscie103_olap_oltp   (the sibling's is untouched)
 #   bundle.name  cscie103-olap-oltp   drives root_path, so workspace files land
 #                                     under a different .bundle/ directory
+#
+# Identity is the third boundary and lives in src/cscie103_olap_oltp/identity.py:
+# a dedicated service principal per workload, so audit attribution is preserved
+# and one project can be revoked without affecting the other.
 #
 # THE CATALOG IS DECLARED AS CODE, WHICH THE SIBLING COULD NOT DO. Catalogs are
 # a bundle resource type on the direct deployment engine, but `bundle bind`
@@ -103,9 +107,6 @@ targets:
       root_path: /Workspace/.bundle-fixture-never-deployed/${bundle.name}
     variables:
       schema_prefix: ''
-      # example.invalid is the RFC-reserved TLD, guaranteed never to resolve.
-      # This target is never deployed, so nothing is ever sent here.
-      owner_email: owner@example.invalid
 
   prod:
     mode: production
@@ -128,12 +129,11 @@ targets:
     # production additionally validate that the paths are not scoped to a
     # specific user AND that run_as and permissions are declared.
     #
-    # Free Edition gives no service principal, so we are in that second branch:
-    # the /Workspace/Shared root above is mandatory rather than a preference.
-    #
-    # DOCUMENTED GAP, NOT A SOLVED PROBLEM: run_as is a human identity. Real
-    # production runs as a service principal so deployments survive a person
-    # leaving. That upgrade is a platform-tier decision, not a config change.
+    # THIS PROJECT NOW HAS A SERVICE PRINCIPAL -- cscie103-olap-oltp-ci, created
+    # by the identity module. Pointing run_as at it is the documented production
+    # pattern and would close the gap recorded here. It is deliberately NOT done
+    # yet: that principal holds read-only catalog privileges by design, and
+    # granting it deploy rights is a separate decision with its own review.
     run_as:
       # SUBSTITUTION, NOT A LITERAL ADDRESS. A hardcoded email is personal data
       # committed to the repository, and it makes the bundle non-portable:
@@ -150,13 +150,24 @@ targets:
 # --- Variables -----------------------------------------------------------------
 # Declared once, overridden per target. This is what makes dev/prod promotion a
 # parameter change rather than a second copy of the configuration.
+#
+# EVERY VARIABLE HERE IS CONSUMED BY SOMETHING. An earlier version also declared
+# owner_email -- job failure notifications, ported from the sibling project --
+# and it had NO DEFAULT by design, because an address in the repository is
+# personal data. With no job yet declared, nothing read it, and the only effect
+# was that every deploy failed demanding a value the bundle had no use for.
+#
+# A REQUIRED INPUT THAT NOTHING CONSUMES IS NOT CAUTION, IT IS CEREMONY, and the
+# obvious workaround -- exporting BUNDLE_VAR_owner_email on every deploy --
+# sustains the ceremony and leaves a value that rots unnoticed until a job
+# finally arrives. It is reintroduced with the job that needs it, not before.
 variables:
   catalog:
     description: >-
       Unity Catalog catalog for this project, CREATED AND OWNED BY THIS BUNDLE.
-      Deliberately distinct from the sibling project's cscie103_catalog: the
-      catalog is the only isolation boundary Free Edition offers, since the
-      workspace and metastore are shared.
+      Deliberately distinct from the sibling project's catalog: this is the only
+      isolation boundary Free Edition offers, since the workspace and metastore
+      are shared.
     default: cscie103_olap_oltp
   oltp_schema:
     description: >-
@@ -175,16 +186,6 @@ variables:
       ${var.schema_prefix}${var.oltp_schema} so nothing hardcodes a name that
       development mode is going to rewrite.
     default: ''
-  owner_email:
-    description: >-
-      Where job failure notifications go. NOT the deployer: using the deploying
-      identity sends CI failures to a service principal, an identity with no
-      inbox, and a notification nobody receives is worse than none because it
-      looks like coverage.
-
-      NO DEFAULT, DELIBERATELY. An address here would be personal data committed
-      to the repository. Each target supplies its own: a placeholder for fixture
-      capture, the real address via BUNDLE_VAR_owner_email when deploying.
   environment_version:
     description: >-
       Databricks serverless environment version. AUTHORITATIVE: this value
@@ -193,4 +194,8 @@ variables:
       The env-parity gate fails the build when the two disagree, because Spark
       Connect requires client and server to share a Python minor version and the
       failure otherwise appears at UDF execution time, far from its cause.
+
+      CONSUMED BY THE GATE, NOT BY A RESOURCE. That is deliberate: the value has
+      to exist before any job does, because the interpreter it selects is what
+      the local toolchain must match.
     default: "5"

@@ -414,3 +414,42 @@ usage = '''
 arg "<slug>" help="The slug used with worktree:add"
 '''
 run = 'uv run python -m cscie103_olap_oltp.git.worktree refresh "${usage_slug?}"'
+
+# --- Bootstrap ----------------------------------------------------------------
+# THE ORDERING IS EXECUTABLE, NOT REMEMBERED. Each step depends on the one
+# before, and running them out of order fails in ways that read as unrelated
+# bugs -- a missing catalog looks like a broken grant, a missing group looks
+# like a permissions problem.
+#
+# EVERY STEP IS IDEMPOTENT, so this converges rather than needing a clean slate.
+
+[tasks."bootstrap:catalog"]
+description = "Create this project's Unity Catalog catalog (idempotent)"
+# NOT A BUNDLE RESOURCE ON THIS TIER. Declaring a catalog in the bundle fails
+# with "Metastore storage root URL does not exist" -- databricks/cli#4513, closed
+# as not planned. `CREATE CATALOG IF NOT EXISTS` with no location resolves
+# storage from Default Storage and works.
+run = "uv run python -m cscie103_olap_oltp.catalog"
+
+[tasks."bootstrap:identity"]
+description = "Create the group and service principal, and reconcile grants"
+# REPORTS PENDING RATHER THAN SUCCESS when the catalog does not exist yet, so a
+# partial reconcile cannot look like a finished one. Exit 2 means "deploy, then
+# run me again"; exit 1 means something is broken.
+run = "uv run python -m cscie103_olap_oltp.identity"
+
+[tasks.bootstrap]
+description = "Bring a fresh workspace to a deployable state, in dependency order"
+# CATALOG BEFORE IDENTITY BEFORE DEPLOY, and identity again afterwards.
+#
+# The last step is not redundant: grants target the catalog, and on a workspace
+# where the schemas did not exist the first identity pass has nothing to grant
+# on beyond the catalog itself. Running it again after the deploy is what makes
+# the sequence converge in one command instead of two rounds of manual retry.
+run = '''
+set -euo pipefail
+mise run bootstrap:catalog
+mise run bootstrap:identity
+mise run bundle:deploy
+mise run bootstrap:identity
+'''

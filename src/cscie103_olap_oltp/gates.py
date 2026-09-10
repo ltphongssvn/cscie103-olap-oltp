@@ -104,6 +104,13 @@ GATES: tuple[Gate, ...] = (
         name="repo hygiene",
         command=("uv", "run", "python", "-m", "cscie103_olap_oltp.hygiene"),
     ),
+    # THE AUDIT TRAIL IS VERIFIED, NOT MERELY WRITTEN. A hash chain nobody
+    # recomputes is decoration: tampering is detectable only if something
+    # actually detects it. Offline, and fast -- it walks a local file.
+    Gate(
+        name="ledger",
+        command=("uv", "run", "python", "-m", "cscie103_olap_oltp.ledger"),
+    ),
     # PII BY CONTENT, WHERE THE OTHER TWO CHECK FORM AND PATH.
     #
     # .gitignore filters by FORMAT and the hygiene gate by PATH; both are

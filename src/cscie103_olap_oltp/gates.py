@@ -111,6 +111,21 @@ GATES: tuple[Gate, ...] = (
         name="ledger",
         command=("uv", "run", "python", "-m", "cscie103_olap_oltp.ledger"),
     ),
+    # THE PUBLISHED ARTIFACT SCHEMA MUST STILL DESCRIBE THE MODELS. A consumer
+    # holding contracts/decision.schema.json has no models -- if a field is
+    # renamed and the contract is not regenerated, their reader breaks while
+    # every producer test here still passes.
+    Gate(
+        name="artifact schema",
+        command=(
+            "uv",
+            "run",
+            "python",
+            "-m",
+            "cscie103_olap_oltp.contracts.schema",
+            "--check",
+        ),
+    ),
     # THE ENV CONTRACT IS DERIVED, SO IT MUST BE VERIFIED. A generated file
     # that nobody regenerates is a hand-maintained file with a misleading
     # header -- and template drift is the documented number-one "works on my

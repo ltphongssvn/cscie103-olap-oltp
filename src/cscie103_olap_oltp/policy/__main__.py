@@ -30,9 +30,13 @@ repository removes everywhere else.
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from typing import NamedTuple
 
+from jsonschema import Draft202012Validator
+
+from cscie103_olap_oltp.contracts.schema import committed_schema
 from cscie103_olap_oltp.contracts.verdict import Action, Decision, Outcome
 from cscie103_olap_oltp.ledger import LEDGER_PATH, append
 from cscie103_olap_oltp.policy.evaluate import evaluate_repository
@@ -91,7 +95,21 @@ def record(
     artifacts.mkdir(parents=True, exist_ok=True)
     stamp = decision.decided_at.strftime("%Y%m%dT%H%M%S%fZ")
     path = artifacts / f"{stamp}.json"
-    path.write_text(decision.model_dump_json(indent=2), encoding="utf-8")
+    payload = decision.model_dump_json(indent=2)
+
+    # VALIDATED AGAINST THE PUBLISHED CONTRACT BEFORE IT IS WRITTEN.
+    #
+    # This is what makes the schema load-bearing rather than a document nobody
+    # checks. Pydantic already guaranteed the object; this asks the different
+    # question a CONSUMER asks -- does the JSON on disk match the contract they
+    # were handed. A field excluded from serialisation, or a type that renders
+    # differently, is invisible to the model and fatal to the reader.
+    #
+    # RAISES RATHER THAN WARNS: writing an artifact that violates its own
+    # published shape is worse than writing none, because downstream trusts it.
+    Draft202012Validator(committed_schema()).validate(json.loads(payload))
+
+    path.write_text(payload, encoding="utf-8")
 
     # THE QUERYABLE FIELDS ONLY. Someone filtering this chain asks which
     # contract, what outcome, what the platform did, and how many violations --

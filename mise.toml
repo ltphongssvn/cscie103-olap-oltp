@@ -201,6 +201,13 @@ description = "Authenticate this machine to Databricks (interactive, one-time)"
 # ci.yml. `mise` exports .env for tasks, so DATABRICKS_HOST is already set.
 run = 'databricks auth login --host "$DATABRICKS_HOST" --profile DEFAULT'
 
+[tasks."schema:generate"]
+description = "Regenerate the published artifact schema from the models"
+# DELIBERATE, NOT AUTOMATIC. The committed schema is the contract consumers
+# hold; rewriting it silently whenever a model changed would turn a reviewable
+# decision into a side effect. The gate reports drift, a person resolves it.
+run = "uv run python -m cscie103_olap_oltp.contracts.schema --generate"
+
 [tasks."env:template"]
 description = "Regenerate .env.example from the settings model"
 # THE CONTRACT IS DERIVED, NOT MAINTAINED. A hand-written template drifts the

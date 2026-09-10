@@ -58,8 +58,31 @@ def validate_slug(slug: str) -> None:
         raise SystemExit(f"slug must be lowercase kebab-case: {slug!r}")
 
 
+def worktree_parent(root: Path) -> Path:
+    """The directory siblings are created beside, ASKED OF GIT.
+
+    NOT DERIVED BY STRIPPING ".git" FROM A NAME. Inferring the layout from
+    directory names is the documented defect in this area -- it works only for
+    arrangements whose names follow a convention, and git records the answer
+    explicitly. `--git-common-dir` points at the shared repository in every
+    layout: `<root>/.git` for an ordinary clone, `<root>` itself when bare.
+
+    THE PARENT IS THEN THE SAME DIRECTORY IN BOTH CASES, which is the property
+    that makes one code path serve both.
+    """
+    common = git("rev-parse", "--path-format=absolute", "--git-common-dir", cwd=root)
+    if common.returncode != 0:
+        print(common.stderr.strip(), file=sys.stderr)
+        raise SystemExit(f"not a git repository: {root}")
+
+    shared = Path(common.stdout.strip())
+    # `<root>/.git` for a normal clone; `<root>` for a bare one.
+    base = shared.parent if shared.name == ".git" else shared
+    return base.parent
+
+
 def sibling_name(main: Path, slug: str) -> Path:
-    """<repo>-<slug>, beside the main checkout."""
+    """<repo>-<slug>, beside the parent."""
     return main.parent / f"{main.name}-{slug}"
 
 
@@ -115,12 +138,18 @@ def parse_records(root: Path, _raw: bytes | None = None) -> list[dict[str, str]]
 
     if not records or "worktree" not in records[0]:
         raise SystemExit("no main worktree reported; is this a git repository?")
-    if "bare" in records[0]:
-        raise SystemExit(
-            "the main worktree is bare. The sibling layout composes paths from a "
-            "parent checkout, and a bare repository has none."
-        )
 
+    # A BARE PARENT IS ACCEPTED, HAVING BEEN REFUSED HERE.
+    #
+    # The old refusal reasoned that the sibling layout composes paths from a
+    # parent CHECKOUT and a bare repository has none. Half right: a bare
+    # repository has no working tree, but it does have a path, and siblings
+    # beside it are exactly the layout this project uses -- so the block made
+    # `worktree:remove` impossible in the only arrangement that exists here.
+    #
+    # Tooling elsewhere reached the same conclusion and simply removed the
+    # block, skipping only the checks that genuinely need a working tree. That
+    # is what happens below: nothing here reads a tree.
     return records
 
 

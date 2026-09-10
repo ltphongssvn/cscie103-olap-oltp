@@ -291,6 +291,39 @@ if [ -n "$hooks_path" ]; then
 fi
 
 uv sync --locked --all-groups
+
+# .env IS GITIGNORED, SO GIT CANNOT CARRY IT TO A NEW CHECKOUT.
+#
+# OBSERVED, NOT ANTICIPATED: a freshly created worktree failed eleven tests and
+# two gates on missing LIGHTNING_STUDIO and LIGHTNING_TEAMSPACE. Required config
+# plus a file git will not copy means every new worktree and every fresh clone
+# starts broken -- the cost of fail-fast config when onboarding does not close
+# the gap. The problem is well known enough to have a tool category.
+#
+# SYMLINKED, NOT COPIED, AND THAT IS THE DOCUMENTED CHOICE. A copy per worktree
+# is N files to keep in step; this .env holds machine endpoints with no
+# per-branch variation, so the guidance is to symlink and let one file serve
+# every worktree. Editing it anywhere updates all of them.
+#
+# THE SHARED COPY LIVES IN GIT'S OWN COMMON DIRECTORY, which every worktree
+# already shares and which is never committed -- so no new convention is
+# invented and nothing can be added to the index by accident.
+shared_env="$(git rev-parse --path-format=absolute --git-common-dir)/local.env"
+
+if [ ! -f "$shared_env" ]; then
+  cp .env.example "$shared_env"
+  echo "seeded $shared_env from .env.example -- fill in the required values"
+fi
+
+# NEVER CLOBBER AN EXISTING .env. Someone may have deliberately given this
+# worktree its own; re-running setup must be safe.
+if [ -e .env ]; then
+  echo ".env already present"
+else
+  ln -s "$shared_env" .env
+  echo "linked .env -> $shared_env"
+fi
+
 lefthook install
 
 echo

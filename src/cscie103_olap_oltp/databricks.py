@@ -36,6 +36,7 @@ import sys
 from typing import Any
 
 from cscie103_olap_oltp.policy.snapshot import REPO_ROOT
+from cscie103_olap_oltp.remediation import ActionableError
 
 CONTRACT = REPO_ROOT / "contracts" / "environment-versions.json"
 PYTHON_VERSION_FILE = REPO_ROOT / ".python-version"
@@ -57,6 +58,44 @@ SIBLING_CATALOG = "cscie103_catalog"
 PROJECT_CATALOG = "cscie103_olap_oltp"
 
 
+class DatabricksAuthError(ActionableError):
+    """The CLI has no usable credentials, or its refresh token has expired.
+
+    A DISTINCT CODE FROM A GENERAL CLI FAILURE, because the two send the reader
+    to different places: this one is fixed by re-authenticating, and confusing
+    it with a broken bundle costs an investigation.
+
+    OBSERVED, NOT ANTICIPATED. The OAuth refresh token expired mid-session and
+    three gates failed at once with a raw traceback -- while the CLI itself
+    printed the exact command to run. Carrying that remediation here is the
+    difference between a gate that reports and a gate that resolves.
+    """
+
+    code = "ERR_DATABRICKS_NOT_AUTHENTICATED"
+
+
+class DatabricksCommandError(ActionableError):
+    """A databricks CLI invocation failed for a reason other than credentials."""
+
+    code = "ERR_DATABRICKS_COMMAND_FAILED"
+
+
+# THE STRINGS THE CLI USES TO REPORT AN EXPIRED OR ABSENT CREDENTIAL. Matching
+# on text is unpleasant and unavoidable: the CLI exits 1 for everything, so the
+# exit code cannot distinguish "re-authenticate" from "your bundle is wrong".
+_AUTH_MARKERS = (
+    "refresh token is invalid",
+    "invalid_grant",
+    "cannot configure default credentials",
+    "not authenticated",
+)
+
+
+def _is_auth_failure(stderr: str) -> bool:
+    lowered = stderr.lower()
+    return any(marker in lowered for marker in _AUTH_MARKERS)
+
+
 def _databricks(*args: str) -> subprocess.CompletedProcess[str]:
     """Run the CLI, or report why it could not run.
 
@@ -69,6 +108,31 @@ def _databricks(*args: str) -> subprocess.CompletedProcess[str]:
         text=True,
         check=False,
         cwd=REPO_ROOT,
+    )
+
+
+def _raise_for(stderr: str, command: str) -> None:
+    """Classify a CLI failure, so the reader is sent to the right place.
+
+    RAISES ALWAYS; the return annotation is None rather than NoReturn only
+    because callers read better with an explicit call.
+    """
+    detail = stderr.strip() or "(no stderr)"
+    if _is_auth_failure(detail):
+        raise DatabricksAuthError(
+            f"databricks {command} could not authenticate",
+            remediation="Run `mise run auth:login` to reauthenticate this machine.",
+            command=command,
+            detail=detail,
+        )
+    raise DatabricksCommandError(
+        f"databricks {command} failed",
+        remediation=(
+            "Read the detail below; if it names a missing object, "
+            "`mise run bootstrap` reconciles the catalog, identity and bundle."
+        ),
+        command=command,
+        detail=detail,
     )
 
 
@@ -89,10 +153,7 @@ def resolve_bundle(target: str = PROBE_TARGET) -> dict[str, Any]:
     """
     result = _databricks("bundle", "validate", "-t", target, "--output", "json")
     if result.returncode != 0:
-        raise RuntimeError(
-            f"`databricks bundle validate -t {target}` failed:\n"
-            f"{result.stderr.strip() or '(no stderr)'}"
-        )
+        _raise_for(result.stderr, f"bundle validate -t {target}")
 
     parsed: dict[str, Any] = json.loads(result.stdout)
     return parsed
@@ -184,7 +245,7 @@ def check_prereqs() -> int:
     """
     result = _databricks("catalogs", "list", "--output", "json")
     if result.returncode != 0:
-        raise RuntimeError(f"could not list catalogs:\n{result.stderr.strip() or '(no stderr)'}")
+        _raise_for(result.stderr, "catalogs list")
 
     catalogs = {item["name"]: item for item in json.loads(result.stdout)}
 

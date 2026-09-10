@@ -36,7 +36,6 @@ sibling's. That is the property; the reference was only ever one way to get it.
 """
 
 import json
-import os
 from typing import Any
 
 import pytest
@@ -47,6 +46,7 @@ from cscie103_olap_oltp.databricks import (
     interpreter_drift,
     resolve_bundle,
 )
+from cscie103_olap_oltp.environment import current
 from cscie103_olap_oltp.policy.snapshot import REPO_ROOT
 
 CONTRACT_PATH = REPO_ROOT / "contracts" / "environment-versions.json"
@@ -59,7 +59,7 @@ def credentials_are_promised() -> bool:
     defect; a workstation never did, so a skip there is honest rather than a
     green job that verified nothing.
     """
-    return os.environ.get("CI", "").lower() in {"true", "1"}
+    return current().ci
 
 
 def _contract() -> dict[str, Any]:

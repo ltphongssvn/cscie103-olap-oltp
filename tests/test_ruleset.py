@@ -35,11 +35,11 @@ is tolerable where nothing was promised and is a failure where something was.
 """
 
 import json
-import os
 from typing import Any
 
 import pytest
 
+from cscie103_olap_oltp.environment import current
 from cscie103_olap_oltp.git.ghcli import NotAuthenticatedError
 from cscie103_olap_oltp.policy.ruleset import (
     REQUIRED_CHECK,
@@ -59,7 +59,7 @@ def credentials_are_promised() -> bool:
     is what lets one test be honest on a laptop and strict on a runner without
     two copies of the test.
     """
-    return os.environ.get("CI", "").lower() in {"true", "1"}
+    return current().ci
 
 
 def _contract() -> dict[str, Any]:

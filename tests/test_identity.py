@@ -29,12 +29,12 @@ already used for policy: converged, not converged, or failed.
 """
 
 import inspect
-import os
 from typing import Any
 
 import pytest
 
 from cscie103_olap_oltp import identity
+from cscie103_olap_oltp.environment import current
 from cscie103_olap_oltp.identity import (
     CATALOG_GRANTS,
     GROUPS,
@@ -48,7 +48,7 @@ from cscie103_olap_oltp.identity import (
 def credentials_are_promised() -> bool:
     """Same rule as every other live gate: a runner promised credentials, a
     workstation never did."""
-    return os.environ.get("CI", "").lower() in {"true", "1"}
+    return current().ci
 
 
 def test_the_service_principal_is_this_projects_own() -> None:

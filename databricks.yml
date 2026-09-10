@@ -1,0 +1,201 @@
+# databricks.yml
+# Declarative Automation Bundle -- the desired state of this project in Databricks.
+#
+# --- ISOLATION FROM THE SIBLING PROJECT ---------------------------------------
+#
+# Free Edition gives ONE workspace and ONE metastore, so neither can separate two
+# projects. The boundaries that remain are the catalog and the bundle name, and
+# both are used here:
+#
+#   catalog      cscie103_olap_oltp   (the sibling's is untouched)
+#   bundle.name  cscie103-olap-oltp   drives root_path, so workspace files land
+#                                     under a different .bundle/ directory
+#
+# Identity is the third boundary and lives in src/cscie103_olap_oltp/identity.py:
+# a dedicated service principal per workload, so audit attribution is preserved
+# and one project can be revoked without affecting the other.
+#
+# THE CATALOG IS DECLARED AS CODE, WHICH THE SIBLING COULD NOT DO. Catalogs are
+# a bundle resource type on the direct deployment engine, but `bundle bind`
+# cannot adopt existing Unity Catalog catalogs (databricks/cli#4842) -- so a
+# declared catalog is always CREATED, and declaring one that already exists is a
+# guaranteed create-conflict with no adoption path out. The sibling's catalog
+# predated its bundle, which is why it had to treat it as an unmanaged
+# prerequisite. This one does not exist yet, so the free moment to own it is now:
+# after the first deploy it is unreachable forever.
+#
+# NO isolation_mode FIELD, THOUGH ISOLATED WOULD BE THE RIGHT SEMANTIC. The CLI
+# schema validator rejects it (databricks/cli#5183) even though it is a
+# documented Unity Catalog attribute. Setting it by hand in the UI would put a
+# governance decision outside version control, so the catalog stays OPEN and the
+# gap is recorded here rather than papered over.
+
+bundle:
+  name: cscie103-olap-oltp
+  # DECLARED, NOT INHERITED. `direct` is already the default in this CLI, but
+  # catalogs, schemas and volumes are only supported on that engine -- so the
+  # bundle would break silently if the default ever changed under it. Naming the
+  # dependency is cheaper than diagnosing it later.
+  engine: direct
+
+include:
+  - resources/*.yml
+
+# --- Targets -------------------------------------------------------------------
+# dev is default so an unqualified `bundle deploy` cannot reach prod by accident.
+targets:
+  dev:
+    mode: development
+    default: true
+    workspace:
+      # NO host MAPPING HERE, AND THAT IS THE POINT.
+      #
+      # Pinning workspace.host sends bundle commands down a DIFFERENT auth path
+      # than every other command: the CLI falls back to the default profile ONLY
+      # when the bundle declares neither workspace.host nor workspace.profile.
+      # Pinning a host means "find a profile in .databrickscfg matching this
+      # host", which REQUIRES that file to exist -- and on a CI runner it does
+      # not, so `bundle validate` dies with "cannot parse config file" while
+      # `databricks auth describe` succeeds in the same step with the same
+      # credentials.
+      #
+      # The host comes from DATABRICKS_HOST instead, which also makes this
+      # bundle portable rather than hardcoded to one workspace.
+      #
+      # DEPLOY TO A PATH OWNED BY THE DEPLOYING IDENTITY, per Databricks' own
+      # template guidance: avoid /Shared, which is writable by every workspace
+      # user.
+      root_path: /Workspace/Users/${workspace.current_user.userName}/.bundle/${bundle.name}/${bundle.target}
+    variables:
+      # THE PREFIX IS ACCEPTED, NOT SUPPRESSED.
+      #
+      # development mode renames schemas: the CLI sanitises "[dev <user>] " into
+      # "dev_<user>_", so oltp deploys as dev_ltphongssvn_oltp. That is a legal
+      # UC identifier.
+      #
+      # experimental.skip_name_prefix_for_schema would stop it and is the wrong
+      # tool even though it works: a resource's NAME IS ITS IDENTITY to the
+      # bundle, so enabling it after a deploy makes the CLI create unprefixed
+      # schemas and DELETE the prefixed ones, data included. Before the first
+      # deploy is the only free moment to choose, so we choose the pattern that
+      # needs no flag: accept the rename, and let consumers read the effective
+      # name from this variable.
+      schema_prefix: dev_${workspace.current_user.short_name}_
+
+  # A SYNTHETIC TARGET FOR FIXTURE CAPTURE. NEVER DEPLOYED.
+  #
+  # Policy rules and gates are written against the shape the CLI really
+  # produces, so that shape has to be captured. Capturing `dev` would make the
+  # fixture identity-dependent -- dev mode prefixes names with the deployer and
+  # deploys to a user-scoped path, so the same bundle resolves differently for a
+  # laptop and a service principal, and a check passes locally while failing in
+  # CI.
+  #
+  # Scrubbing those fields is a losing game: the next bundle change adds another
+  # place for identity to appear. The snapshot-testing rule is to INJECT a
+  # deterministic input rather than scrub nondeterministic output, and this is
+  # that -- a synthetic probe target that resolves without workspace identity.
+  #
+  # NO mode:, so no name prefix and no dev tags.
+  # NO current_user in root_path, so no identity in any path.
+  fixture:
+    workspace:
+      # NOT /Workspace/Shared, which is writable by every workspace user and
+      # earns a validator warning. Silencing that with a permissions block would
+      # pretend this target is deployed; it is not. The path only has to be
+      # identity-free, and a non-existent one is the most honest choice.
+      root_path: /Workspace/.bundle-fixture-never-deployed/${bundle.name}
+    variables:
+      schema_prefix: ''
+
+  prod:
+    mode: production
+    # THE DEPLOYMENT TOOL ENFORCES GITFLOW, NOT A CONVENTION.
+    # production mode validates the current git branch against this value and
+    # refuses to deploy otherwise (overridable only with --force), so a prod
+    # deploy from a feature branch is impossible by accident.
+    git:
+      branch: main
+    workspace:
+      # NOT A USER PATH, DELIBERATELY DIFFERENT FROM dev ABOVE.
+      # production mode REJECTS user-specific paths and expects run_as and
+      # permissions. Copying the dev root_path here fails on the first prod
+      # deploy.
+      root_path: /Workspace/Shared/.bundle/${bundle.name}/${bundle.target}
+    # run_as AND permissions ARE REQUIRED HERE, NOT OPTIONAL POLISH.
+    #
+    # The production path rule is CONDITIONAL. Databricks recommends a SERVICE
+    # PRINCIPAL for production via run_as. Only if you do NOT use one does
+    # production additionally validate that the paths are not scoped to a
+    # specific user AND that run_as and permissions are declared.
+    #
+    # THIS PROJECT NOW HAS A SERVICE PRINCIPAL -- cscie103-olap-oltp-ci, created
+    # by the identity module. Pointing run_as at it is the documented production
+    # pattern and would close the gap recorded here. It is deliberately NOT done
+    # yet: that principal holds read-only catalog privileges by design, and
+    # granting it deploy rights is a separate decision with its own review.
+    run_as:
+      # SUBSTITUTION, NOT A LITERAL ADDRESS. A hardcoded email is personal data
+      # committed to the repository, and it makes the bundle non-portable:
+      # anyone else deploying would run as someone who is not them.
+      user_name: ${workspace.current_user.userName}
+    permissions:
+      - level: CAN_MANAGE
+        group_name: users
+    variables:
+      # Empty: production mode does not prefix. Names deploy exactly as
+      # declared.
+      schema_prefix: ''
+
+# --- Variables -----------------------------------------------------------------
+# Declared once, overridden per target. This is what makes dev/prod promotion a
+# parameter change rather than a second copy of the configuration.
+#
+# EVERY VARIABLE HERE IS CONSUMED BY SOMETHING. An earlier version also declared
+# owner_email -- job failure notifications, ported from the sibling project --
+# and it had NO DEFAULT by design, because an address in the repository is
+# personal data. With no job yet declared, nothing read it, and the only effect
+# was that every deploy failed demanding a value the bundle had no use for.
+#
+# A REQUIRED INPUT THAT NOTHING CONSUMES IS NOT CAUTION, IT IS CEREMONY, and the
+# obvious workaround -- exporting BUNDLE_VAR_owner_email on every deploy --
+# sustains the ceremony and leaves a value that rots unnoticed until a job
+# finally arrives. It is reintroduced with the job that needs it, not before.
+variables:
+  catalog:
+    description: >-
+      Unity Catalog catalog for this project, CREATED AND OWNED BY THIS BUNDLE.
+      Deliberately distinct from the sibling project's catalog: this is the only
+      isolation boundary Free Edition offers, since the workspace and metastore
+      are shared.
+    default: cscie103_olap_oltp
+  oltp_schema:
+    description: >-
+      Bare schema name for the normalised source side. The RESOURCE keeps this
+      plain value -- never interpolate schema_prefix into resources.schemas.*.name,
+      because the CLI adds its own prefix on top and you get
+      dev_user_dev_user_oltp.
+    default: oltp
+  olap_schema:
+    description: Bare schema name for the dimensional side.
+    default: olap
+  schema_prefix:
+    description: >-
+      What the CLI prepends in this target. Consumers -- job parameters,
+      notebook widgets -- build the effective name as
+      ${var.schema_prefix}${var.oltp_schema} so nothing hardcodes a name that
+      development mode is going to rewrite.
+    default: ''
+  environment_version:
+    description: >-
+      Databricks serverless environment version. AUTHORITATIVE: this value
+      determines the Python interpreter the server runs, and
+      contracts/environment-versions.json maps it to the local .python-version.
+      The env-parity gate fails the build when the two disagree, because Spark
+      Connect requires client and server to share a Python minor version and the
+      failure otherwise appears at UDF execution time, far from its cause.
+
+      CONSUMED BY THE GATE, NOT BY A RESOURCE. That is deliberate: the value has
+      to exist before any job does, because the interpreter it selects is what
+      the local toolchain must match.
+    default: "5"

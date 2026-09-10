@@ -24,8 +24,7 @@
 #
 # THE ALTERNATIVE WAS `nix develop --command` AT EVERY CALL SITE: every task
 # body, every hook job and the CI workflow, each depending on someone
-# remembering. One forgotten call site is a task that works for whoever happens
-# to be inside a shell already and fails for everyone else. R002 enforces it.
+# remembering. R002 enforces it.
 #
 # THE SHELL IS ALSO PINNED. mise defaults to `sh`, which is bash-in-POSIX-mode
 # on macOS and dash on the Ubuntu runner: same task body, different interpreter,
@@ -46,10 +45,6 @@ description = "Evaluate the flake on every supported platform"
 # --all-systems IS THE POINT. Without it only the current platform is checked,
 # and a package present on Darwin but not Linux passes locally and breaks on the
 # runner.
-#
-# --no-build PROVES NAMES RESOLVE, NOT THAT THEY BUILD. The unfree licence on
-# databricks-cli is checked at REALISATION, so it passed three green platforms
-# here and would have failed on the first real `nix develop`.
 run = "nix flake check --no-build --all-systems"
 
 # --- Individual gates ---------------------------------------------------------
@@ -58,15 +53,10 @@ run = "nix flake check --no-build --all-systems"
 # AGGREGATES them via src/cscie103_olap_oltp/gates.py; it does not replace them,
 # and there is no second copy of the list to drift.
 #
-# EVERY TASK RUNS PYTHON THROUGH uv, NEVER BARE python3. A bare interpreter name
-# is PATH resolution, and PATH is ambient state this repo does not control.
-# R003 enforces it.
+# EVERY TASK RUNS PYTHON THROUGH uv, NEVER BARE python3. R003 enforces it.
 
 [tasks.fmt]
 description = "Apply every safe autofix: formatting AND import ordering"
-# TWO OPERATIONS, NOT ONE. `ruff format` handles layout; import ORDERING is the
-# I lint rule, fixed by `ruff check --fix`.
-#
 # `;` NOT `&&`. ruff check --fix exits non-zero when a finding has no safe
 # autofix, which with && would stop the formatter running -- and the formatter
 # is often what resolves the remaining finding, since line-length is fixed by
@@ -75,8 +65,6 @@ run = "uv run ruff check --fix . ; uv run ruff format ."
 
 [tasks.lint]
 description = "Lint (the same invocation the gate runner uses)"
-# WITHOUT --fix, DELIBERATELY. A CI job that fixes its own input can pass while
-# the committed code stays wrong.
 run = "uv run ruff check ."
 
 [tasks.types]
@@ -96,10 +84,9 @@ run = "uv run pytest"
 
 [tasks."test:integration"]
 description = "Tests requiring network and credentials"
-# WITHOUT THIS TASK THE INTEGRATION TESTS RUN NOWHERE. They are deselected from
-# the default run by design, so writing one and stopping there produces a test
-# that exists and never executes -- worse than no test, because it looks like
-# coverage.
+# WITHOUT THIS THE INTEGRATION TESTS RUN NOWHERE. They are deselected from the
+# default run by design, so writing one and stopping there produces a test that
+# exists and never executes.
 run = "uv run pytest -m integration"
 
 [tasks."check:policy"]
@@ -122,15 +109,28 @@ description = "Evaluate this repo against its own policies, and record the verdi
 #   check:policy-decisions  does the CODEBASE satisfy them?
 run = "uv run python -m cscie103_olap_oltp.policy"
 
+[tasks."check:hygiene"]
+description = "Refuse tracked files that look like accidents"
+# THIS REPOSITORY ALREADY COMMITTED ONE: a zero-byte file named `....` from a
+# misfired heredoc, staged by `git add -A` and caught by reading the commit
+# output rather than by any gate.
+run = "uv run python -m cscie103_olap_oltp.hygiene"
+
+[tasks."check:pii"]
+description = "Scan tracked files for personal data, by CONTENT"
+# .gitignore filters by FORMAT and check:hygiene by PATH; both are proxies for a
+# rule about CONTENT. An HTML export of an executed notebook carries names and
+# salaries in its cell outputs and matches no rule at all.
+#
+# NO ALLOWLIST, EVER. `git rm` does not remove data from history, so a
+# suppressed finding is a leak that has stopped being reported.
+run = "uv run python -m cscie103_olap_oltp.pii"
+
 [tasks."check:secrets"]
 description = "Scan the FULL HISTORY for committed credentials"
-# FULL HISTORY, NOT THE WORKING TREE. A pre-commit hook only ever sees the
-# incoming change, so anything committed before hooks existed -- or pushed with
-# --no-verify -- has never been scanned.
-#
-# betterleaks rather than gitleaks: same author, MIT, drop-in, and gitleaks now
-# receives security patches only.
-run = "betterleaks git ."
+# --redact IS NOT COSMETIC: without it a finding prints the credential into a CI
+# log that is retained and often world-readable.
+run = "betterleaks git --redact --no-banner"
 
 [tasks."check:deps"]
 description = "Scan uv.lock for known vulnerabilities"
@@ -140,11 +140,22 @@ run = "osv-scanner scan source --lockfile uv.lock"
 description = "Audit the GitHub Actions workflow that runs the gate"
 run = "zizmor .github/workflows/ci.yml"
 
+[tasks."check:env-parity"]
+description = "Fail if the local interpreter drifts from the deployed environment"
+# Spark Connect requires client and server to share a Python MINOR version. The
+# failure otherwise appears when a UDF dies, far from the change that caused it.
+run = "uv run python -m cscie103_olap_oltp.databricks env-parity"
+
+[tasks."check:prereqs"]
+description = "Verify the unmanaged dependencies the bundle relies on"
+# Without this a missing prerequisite surfaces as a deploy failure with an API
+# error naming the symptom rather than the cause.
+run = "uv run python -m cscie103_olap_oltp.databricks prereqs"
+
 [tasks."check:ruleset"]
 description = "Verify develop and main are actually protected on the server"
 # CHECKS THE RULESET'S CONTENTS, NOT ITS EXISTENCE. One edited to require
-# nothing is the failure mode that looks like success -- and this repository
-# opened its first pull request in exactly that state.
+# nothing is the failure mode that looks like success.
 run = "uv run python -m cscie103_olap_oltp.policy.check_ruleset"
 
 # --- The gate -----------------------------------------------------------------
@@ -154,13 +165,8 @@ description = "The quality gate. CI runs exactly this task; nothing is restated 
 # DELEGATES TO A RUNNER, HAVING ORIGINALLY CHAINED WITH &&.
 #
 # The chain stopped at the first failure, which produces fix-one, re-run,
-# discover-the-next -- a treadmill built into the gate. It hid real findings
-# during this project's own construction: five mypy errors were invisible until
-# lint passed, and four ruff errors were invisible until the write before that.
-#
-# gates.py runs every gate to completion and reports ALL failures in one pass.
-# Serial and slower, deliberately: on a gate that runs on every commit, telling
-# the whole truth beats a few seconds.
+# discover-the-next -- a treadmill built into the gate. gates.py runs every gate
+# to completion and reports ALL failures in one pass.
 #
 # NOT depends = [...] EITHER. mise runs dependencies in PARALLEL with no order
 # and reports failure as soon as one fails, so a slower gate may never report at
@@ -172,11 +178,40 @@ run = "uv run python -m cscie103_olap_oltp.gates"
 description = "The gate minus anything needing network (git hooks)"
 # SAME LIST, FILTERED -- not a second list. gates.py marks each gate with
 # whether it needs the network; --offline selects the rest.
-#
-# WHY HOOKS DO NOT RUN THE FULL GATE: a pre-push that fails on a plane is one
-# people bypass with --no-verify, and a bypassed hook catches nothing. CI runs
-# the full gate; that is the layer where a bypass is caught.
 run = "uv run python -m cscie103_olap_oltp.gates --offline"
+
+# --- Databricks ---------------------------------------------------------------
+
+[tasks."bundle:validate"]
+description = "Resolve the bundle against the workspace (fixture target)"
+# THE FIXTURE TARGET, NOT dev. It resolves without deployer identity, so the
+# output is the same on a laptop and a runner -- which is what makes it usable
+# as a stable snapshot for the gates that read it.
+run = "databricks bundle validate -t fixture"
+
+[tasks."bundle:deploy"]
+description = "Deploy the bundle to the dev target"
+# dev IS THE DEFAULT TARGET so an unqualified deploy cannot reach prod by
+# accident. Naming it here anyway makes the intent explicit at the call site.
+run = "databricks bundle deploy -t dev"
+
+[tasks."auth:login"]
+description = "Authenticate this machine to Databricks (interactive, one-time)"
+# WRITES THE DEFAULT PROFILE, NOT A NAMED ONE, AND THAT IS THE WHOLE POINT.
+# The CLI resolves environment variables, then the DEFAULT profile, stopping at
+# the first success -- so a laptop falls through to DEFAULT and CI stops at its
+# own env vars. Identical code runs in both.
+#
+# A NAMED profile must be selected with -p, which needs a heuristic to decide
+# when to pass it, which must be right in every environment. The sibling project
+# shipped that and spent four CI failures unwinding it.
+run = "databricks auth login --host https://dbc-c7e8aa56-e393.cloud.databricks.com --profile DEFAULT"
+
+[tasks."auth:describe"]
+description = "Report which credentials the CLI resolved, and from where"
+# THE DIAGNOSTIC THAT ENDS AUTH DEBUGGING LOOPS: it reports the resolved auth
+# type and the SOURCE of every field.
+run = "databricks auth describe"
 
 # --- Onboarding ---------------------------------------------------------------
 
@@ -273,9 +308,6 @@ gh api "repos/{owner}/{repo}/rulesets" \
 description = "Open a PR and block until it is merged"
 # BLOCKS, DELIBERATELY. Enabling auto-merge and returning moves the cost to the
 # person, who then watches the Actions tab and confirms the merge by hand.
-#
-# Three phases, because waiting for checks to APPEAR and waiting for them to
-# FINISH are different problems, and the rollup lags both. Each is bounded.
 run = "uv run python -m cscie103_olap_oltp.git.pr"
 
 [tasks."pr-status"]
@@ -311,8 +343,7 @@ git log --oneline develop..HEAD 2>/dev/null || echo "(on develop)"
 [tasks."start:check"]
 description = "Refuse to work on a protected branch"
 # Wired into the pre-commit hook so the guard fires before a commit lands rather
-# than after. Fails closed, which is what an unattended run needs. R011 enforces
-# that the hook keeps calling it.
+# than after. R011 enforces that the hook keeps calling it.
 run = '''
 set -euo pipefail
 branch="$(git rev-parse --abbrev-ref HEAD)"
@@ -351,9 +382,6 @@ esac
 '''
 
 # --- Worktrees ----------------------------------------------------------------
-# Linked worktrees let one task proceed while another is mid-review, without
-# stashing or a second clone.
-#
 # THE ? IN ${usage_slug?} IS THE POINT: bash parameter expansion that FAILS when
 # the variable is unset rather than expanding to empty. Without it a missing
 # argument becomes `worktree remove ""`, a command that runs and does something
@@ -361,9 +389,6 @@ esac
 
 [tasks."worktree:add"]
 description = "Create a sibling worktree on a new feature branch, with setup run"
-# Creates <repo>-<slug> beside the main clone off origin/develop, then runs
-# `mise run setup` inside it. Without that a fresh worktree has no .venv and no
-# hooks, so the gate cannot run and a commit is refused.
 usage = '''
 arg "<slug>" help="Short kebab-case description, e.g. star-schema"
 '''
@@ -375,9 +400,6 @@ run = "uv run python -m cscie103_olap_oltp.git.worktree list"
 
 [tasks."worktree:remove"]
 description = "Remove a worktree and delete its branch, refusing to force either"
-# `git worktree remove` refuses on modified or untracked files and `git branch
-# -d` refuses unmerged work. Neither is forced: the first prevents losing an
-# uncommitted change, the second doubles as proof the merge happened.
 usage = '''
 arg "<slug>" help="The slug used with worktree:add"
 '''
@@ -385,8 +407,6 @@ run = 'uv run python -m cscie103_olap_oltp.git.worktree remove "${usage_slug?}"'
 
 [tasks."worktree:refresh"]
 description = "Rebase a worktree's branch onto current origin/develop"
-# A worktree cut days ago is built on a develop that no longer exists.
-#
 # REFUSES ON A DIRTY TREE rather than using --autostash. git's own manual warns
 # that the stash application after a successful rebase might produce non-trivial
 # conflicts, and rebase.autoStash defaults to false for that reason.
@@ -394,3 +414,42 @@ usage = '''
 arg "<slug>" help="The slug used with worktree:add"
 '''
 run = 'uv run python -m cscie103_olap_oltp.git.worktree refresh "${usage_slug?}"'
+
+# --- Bootstrap ----------------------------------------------------------------
+# THE ORDERING IS EXECUTABLE, NOT REMEMBERED. Each step depends on the one
+# before, and running them out of order fails in ways that read as unrelated
+# bugs -- a missing catalog looks like a broken grant, a missing group looks
+# like a permissions problem.
+#
+# EVERY STEP IS IDEMPOTENT, so this converges rather than needing a clean slate.
+
+[tasks."bootstrap:catalog"]
+description = "Create this project's Unity Catalog catalog (idempotent)"
+# NOT A BUNDLE RESOURCE ON THIS TIER. Declaring a catalog in the bundle fails
+# with "Metastore storage root URL does not exist" -- databricks/cli#4513, closed
+# as not planned. `CREATE CATALOG IF NOT EXISTS` with no location resolves
+# storage from Default Storage and works.
+run = "uv run python -m cscie103_olap_oltp.catalog"
+
+[tasks."bootstrap:identity"]
+description = "Create the group and service principal, and reconcile grants"
+# REPORTS PENDING RATHER THAN SUCCESS when the catalog does not exist yet, so a
+# partial reconcile cannot look like a finished one. Exit 2 means "deploy, then
+# run me again"; exit 1 means something is broken.
+run = "uv run python -m cscie103_olap_oltp.identity"
+
+[tasks.bootstrap]
+description = "Bring a fresh workspace to a deployable state, in dependency order"
+# CATALOG BEFORE IDENTITY BEFORE DEPLOY, and identity again afterwards.
+#
+# The last step is not redundant: grants target the catalog, and on a workspace
+# where the schemas did not exist the first identity pass has nothing to grant
+# on beyond the catalog itself. Running it again after the deploy is what makes
+# the sequence converge in one command instead of two rounds of manual retry.
+run = '''
+set -euo pipefail
+mise run bootstrap:catalog
+mise run bootstrap:identity
+mise run bundle:deploy
+mise run bootstrap:identity
+'''

@@ -1,0 +1,83 @@
+# resources/unity_catalog.yml
+# The Unity Catalog objects this bundle owns.
+#
+# EVERYTHING HERE IS FULLY MANAGED BY THE BUNDLE, which is a stronger claim than
+# it sounds. A declared schema is created or DROPPED by the bundle -- there is no
+# grant-only mode for UC objects -- so declaring an object that holds real work
+# puts a destructive plan one `bundle destroy` away from it. Only objects this
+# project creates from scratch appear below.
+#
+# --- WHY THERE IS NO catalogs: BLOCK, THOUGH THERE WAS ONE -------------------
+#
+# Catalogs ARE a bundle resource type on the direct deployment engine, and this
+# project declared one. That was correct in principle: our catalog did not exist,
+# and `bundle bind` cannot adopt an existing Unity Catalog catalog
+# (databricks/cli#4842), so declaring it was the only moment it could be owned.
+#
+# The deploy failed:
+#
+#     Metastore storage root URL does not exist. Default Storage is enabled in
+#     your account. (400 INVALID_STATE)
+#
+# That is databricks/cli#4513 -- filed February 2026 against exactly this
+# combination, Free Edition with no default location configured, and CLOSED AS
+# NOT PLANNED. The bundle's REST POST /catalogs path demands a storage_root the
+# metastore does not have.
+#
+# ADDING THE BLOCK BACK WILL REPRODUCE THAT FAILURE. The catalog is created
+# instead by src/cscie103_olap_oltp/catalog.py, using
+# `CREATE CATALOG IF NOT EXISTS` with no location -- which serverless workspaces
+# resolve from Default Storage. Still as code, still tested; a different API.
+#
+# MIGRATION TRIGGER: if that issue is fixed, or this account gains a metastore
+# root storage location, move the catalog back here and delete that module.
+
+resources:
+  schemas:
+    # TWO SCHEMAS, BECAUSE THE PROJECT'S WHOLE POINT IS THAT THESE ARE DIFFERENT
+    # MODELLING DISCIPLINES. Keeping normalised sources and the dimensional
+    # model in one schema would blur exactly the distinction being demonstrated,
+    # and would make "which layer is this table in" a naming convention rather
+    # than a structural fact.
+    #
+    # THE OWNER OF A SCHEMA RESOURCE IS ALWAYS THE DEPLOYING USER and cannot be
+    # changed; run_as is ignored for schema operations. Recorded because it is a
+    # documented limitation, not something to discover during a prod deploy.
+    oltp:
+      # THE VARIABLE, NOT A RESOURCE REFERENCE, because the catalog is no longer
+      # a resource of this bundle. The ordering dependency it used to declare is
+      # now enforced by the bootstrap sequence instead: the catalog exists before
+      # a deploy is attempted, and the deploy fails loudly if it does not.
+      catalog_name: ${var.catalog}
+      # THE PLAIN NAME, NOT ${var.schema_prefix} prepended. The CLI adds its own
+      # prefix in development mode; interpolating it here too produces
+      # dev_user_dev_user_oltp.
+      name: ${var.oltp_schema}
+      comment: >-
+        Normalised source side. Third normal form, entity-relationship modelled,
+        application oriented -- the shape an operational system writes.
+
+    olap:
+      catalog_name: ${var.catalog}
+      name: ${var.olap_schema}
+      comment: >-
+        Dimensional side. Star schema, subject oriented, historical and
+        consolidated -- the shape analytical queries read.
+
+  volumes:
+    # RAW LANDING, UNDER THE OLTP SCHEMA. Source extracts arrive here before any
+    # transformation, so the volume belongs with the side that produces them.
+    #
+    # A MANAGED VOLUME, NOT EXTERNAL. An external volume needs a storage
+    # credential and an external location, and Free Edition has neither; a
+    # managed volume uses the metastore's own storage and needs no cloud setup.
+    raw:
+      catalog_name: ${var.catalog}
+      # THE SCHEMA REFERENCE GOES THROUGH THE RESOURCE, which is still a bundle
+      # resource, so the bundle knows this volume DEPENDS ON that schema and
+      # orders creation accordingly. ${var.oltp_schema} would name the same
+      # string while hiding the dependency, and the deploy would race.
+      schema_name: ${resources.schemas.oltp.name}
+      name: raw
+      volume_type: MANAGED
+      comment: Landing zone for raw source extracts, before any transformation.

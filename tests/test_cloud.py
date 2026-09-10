@@ -1,8 +1,6 @@
 # tests/test_cloud.py
 """Three copies of this repository, and git is the only thing between them.
 
-THE ARCHITECTURE, WHICH IS THE WHOLE POINT.
-
     laptop  --push-->  GitHub  <--pull--  Lightning Studio
 
 The repository is the source of truth; the Studio is only where execution
@@ -10,89 +8,121 @@ happens. Code travels via git and never by copying files, so the three copies
 cannot drift -- and "in sync" becomes a fact anyone can verify with one command
 rather than a belief about what was last uploaded.
 
-The rejected alternative is `lightning cp`. It works, and it produces exactly
-the drift this design exists to prevent: a file uploaded from one machine has no
-commit, no history, and no way to answer which version the Studio is running.
+`lightning cp` is the rejected alternative. It works, and it produces exactly
+the drift this design prevents: an uploaded file has no commit, no history, and
+no way to say which version the Studio is running.
 
-WHY SSH AND AGENT FORWARDING RATHER THAN HTTPS.
+HOW THE REMOTE URL REACHED ITS THIRD DESIGN, BECAUSE BOTH FAILURES WERE REAL.
 
-This repository is public, so HTTPS would need no credential at all for the pull
-direction -- genuinely simpler. It is rejected for consistency: the sibling
-project uses SSH, and a fleet where each repository authenticates differently is
-one where nobody can predict what a given machine can reach.
+  1. HARDCODED. The PII gate refused the push: an SSH remote of the form
+     user@host is structurally an email address, and the scanner cannot know it
+     is a git remote. The standing rule is to eliminate at source rather than
+     allowlist, since a suppressed finding makes the scanner decoration.
 
-GitHub's own guidance supports the choice: agent forwarding needs no new keys,
-no key management, and stores NOTHING on the server -- so a compromised Studio
-means no credential to hunt down and revoke. Its documented limitation, that
-users must SSH in and automated processes cannot, is not one we have: sync is
-human-initiated by design.
+  2. PASSED THROUGH FROM git remote get-url. That removed the literal, and CI
+     failed: `actions/checkout` configures origin over HTTPS, so the runner
+     derived an HTTPS URL while the laptop derived SSH. Worse than a broken
+     test, it meant the transport the Studio got depended on which machine ran
+     the command.
 
-WHY THE REMOTE URL IS NEVER WRITTEN DOWN, HERE OR IN THE MODULE.
+  3. PARSED AND REBUILT. The remote is decomposed into host, owner and repo --
+     accepting either form -- and the Studio's URL is CONSTRUCTED as SSH. Git
+     stays the single source of truth for WHICH repository; this module decides
+     the TRANSPORT, and decides it the same way everywhere.
 
-The first version hardcoded it, and the PII gate failed the push: an SSH remote
-of the form user@host is structurally an email address, and the scanner cannot
-know it is a git remote. The rule this repository already holds is to eliminate
-at source rather than allowlist, since a suppressed finding makes the scanner
-decoration.
+That is the documented pattern: parse a remote into its components and rebuild
+it in the canonical form the caller needs, rather than depending on the form
+that happens to be configured.
 
-Eliminating it turned out to be the better design anyway. The remote URL is a
-fact git already stores, so writing it in Python was a second copy that could
-drift from `git remote -v` -- and deriving it is the documented pattern for
-anything that needs repository identity. These assertions therefore check the
-SHAPE of the derived URL, and keep the two halves of the user@host form apart so
-this file contains no email-shaped literal either.
+SSH IS THE PROJECT-WIDE CHOICE. The sibling project uses it, and a fleet where
+each repository authenticates differently is one where nobody can predict what a
+given machine can reach. GitHub's own guidance supports agent forwarding for
+this case: no new keys, no key management, and NOTHING stored on the server --
+so a compromised Studio leaves no credential to hunt down and revoke.
 """
+
+import pytest
 
 from cscie103_olap_oltp.cloud import (
     STUDIO_HOST,
     STUDIO_REPO_PATH,
     clone_script,
+    parse_remote,
     pull_script,
-    remote_url,
     ssh_command,
+    studio_remote_url,
 )
 
-# ASSEMBLED, NEVER WRITTEN ADJACENT. Together these spell the scp-style SSH form
+# ASSEMBLED, NEVER WRITTEN ADJACENT. Together these spell the scp-style form
 # that Presidio reads as an address; apart they are two ordinary strings.
-SSH_USER = "git@"
+SSH_USER = "git"
 GIT_HOST = "github.com"
 
+SCP_STYLE = f"{SSH_USER}@{GIT_HOST}:ltphongssvn/cscie103-olap-oltp.git"
+HTTPS_STYLE = f"https://{GIT_HOST}/ltphongssvn/cscie103-olap-oltp"
 
-def test_the_remote_is_ssh_not_https() -> None:
-    """CROSS-PROJECT CONSISTENCY IS THE REASON, NOT SECURITY.
 
-    HTTPS would be simpler here because the repository is public. A fleet where
-    each repo authenticates differently is one where nobody can predict what a
-    machine can reach, so every repository uses the same transport.
+def test_scp_style_remotes_parse() -> None:
+    """The form a laptop configures."""
+    assert parse_remote(SCP_STYLE) == (GIT_HOST, "ltphongssvn", "cscie103-olap-oltp")
+
+
+def test_https_remotes_parse() -> None:
+    """THE FORM actions/checkout CONFIGURES ON A RUNNER.
+
+    This is the case that broke CI when the URL was passed through unchanged.
     """
-    url = remote_url()
-    assert url.startswith(SSH_USER)
-    assert "https://" not in url
+    assert parse_remote(HTTPS_STYLE) == (GIT_HOST, "ltphongssvn", "cscie103-olap-oltp")
 
 
-def test_the_remote_points_at_this_repository() -> None:
-    """DERIVED FROM git, NOT DECLARED. If this ever disagrees with
-    `git remote -v`, the disagreement is impossible rather than merely
-    unlikely."""
-    url = remote_url()
+def test_the_git_suffix_is_optional_on_either_form() -> None:
+    """Both are valid and both appear in the wild, so neither may change the
+    parsed result."""
+    assert parse_remote(SCP_STYLE) == parse_remote(SCP_STYLE.removesuffix(".git"))
+    assert parse_remote(HTTPS_STYLE) == parse_remote(HTTPS_STYLE + ".git")
+
+
+def test_an_unparseable_remote_is_an_error() -> None:
+    """FAIL CLOSED. A silent fallback would send the Studio to clone something
+    that is not this repository."""
+    with pytest.raises(ValueError, match="could not parse"):
+        parse_remote("not-a-remote")
+
+
+def test_the_studio_url_is_ssh_whatever_the_local_transport_is() -> None:
+    """THE ASSERTION THAT MAKES CI AND THE LAPTOP AGREE.
+
+    Both inputs must produce the same SSH output, so the Studio's transport no
+    longer depends on which machine ran the command.
+    """
+    from_scp = studio_remote_url(SCP_STYLE)
+    from_https = studio_remote_url(HTTPS_STYLE)
+
+    assert from_scp == from_https
+    assert from_scp.startswith(f"{SSH_USER}@")
+    assert "https://" not in from_scp
+
+
+def test_the_studio_url_names_this_repository() -> None:
+    url = studio_remote_url(HTTPS_STYLE)
     assert GIT_HOST in url
-    assert "cscie103-olap-oltp" in url
+    assert "ltphongssvn/cscie103-olap-oltp" in url
 
 
 def test_the_studio_path_is_persistent() -> None:
     """~/ltphongssvn RESOLVES INTO /teamspace, WHICH SURVIVES A RESTART.
 
-    A Studio's ordinary home directory does not. Cloning outside /teamspace
-    produces a repository that vanishes on the next restart, and the failure
-    looks like the clone never happened.
+    A Studio's ordinary home directory does not, so a clone placed outside it
+    silently vanishes -- and the failure looks like the clone never happened.
     """
     assert STUDIO_REPO_PATH.startswith("~/ltphongssvn/")
     assert STUDIO_REPO_PATH.endswith("cscie103-olap-oltp")
 
 
 def test_agent_forwarding_is_scoped_to_the_studio_host() -> None:
-    """NEVER GLOBAL. Enabling ForwardAgent for every host means any server you
-    reach can request signatures from your agent for any key it holds."""
+    """NEVER GLOBAL. A host you forward to can request signatures from your
+    agent for any key it holds, so the blast radius is every system that key
+    reaches."""
     command = ssh_command()
     assert "-o" in command
     assert "ForwardAgent=yes" in command
@@ -103,8 +133,7 @@ def test_ssh_is_non_interactive() -> None:
     """THE EXPOSURE WINDOW IS THE LENGTH OF ONE OPERATION.
 
     2026 guidance for agent forwarding is to connect, do the work, disconnect.
-    A one-shot command does that by construction; a long-lived shell leaves the
-    agent reachable for as long as it stays open.
+    A one-shot command does that by construction.
     """
     assert "-T" in ssh_command()
 
@@ -112,50 +141,37 @@ def test_ssh_is_non_interactive() -> None:
 def test_the_pull_script_fast_forwards_only() -> None:
     """A MERGE ON THE STUDIO WOULD CREATE A COMMIT THAT EXISTS NOWHERE ELSE.
 
-    --ff-only makes divergence a loud failure instead of a silent third head,
-    which is exactly the drift the whole design prevents.
+    --ff-only makes divergence a loud failure instead of a silent third head.
     """
     assert "--ff-only" in pull_script()
 
 
 def test_the_pull_script_prunes() -> None:
-    """Without --prune, branches deleted on merge linger on the Studio forever
-    and `git branch -a` stops meaning anything."""
+    """Without --prune, branches deleted on merge linger forever and
+    `git branch -a` stops meaning anything."""
     assert "--prune" in pull_script()
 
 
 def test_the_pull_script_reports_the_resulting_commit() -> None:
-    """A success message is not verifiable; a commit hash is.
-
-    The question being answered is "are the three copies the same", so the
-    answer has to be something comparable.
-    """
+    """A success message is not verifiable; a commit hash is."""
     assert "log --oneline -1" in pull_script()
 
 
 def test_the_pull_script_lands_on_the_integration_branch() -> None:
-    """develop, NOT main. GitFlow makes develop the integration branch, and the
-    Studio should run what is integrated rather than what was last released."""
+    """develop, NOT main. The Studio should run what is integrated rather than
+    what was last released."""
     assert "switch develop" in pull_script()
 
 
 def test_the_clone_script_is_idempotent() -> None:
-    """Running setup twice must not fail on an existing clone.
-
-    A bootstrap that only works on a clean machine is one nobody re-runs, and a
-    bootstrap nobody re-runs cannot reconcile anything.
-    """
+    """A bootstrap that only works on a clean machine is one nobody re-runs,
+    and a bootstrap nobody re-runs cannot reconcile anything."""
     assert "if [ -d" in clone_script()
 
 
 def test_the_clone_script_creates_the_parent_directory() -> None:
     """A fresh Studio has no ~/ltphongssvn at all."""
     assert "mkdir -p" in clone_script()
-
-
-def test_the_clone_script_uses_the_derived_remote() -> None:
-    """The clone and the laptop must agree on where the repository lives."""
-    assert remote_url() in clone_script()
 
 
 def test_no_script_writes_a_credential_to_the_studio() -> None:

@@ -20,9 +20,11 @@ the contract through the module that happens to use it makes the dependency
 invisible and lets the real source move without a failing import.
 """
 
+from pathlib import Path
+
 import pytest
 
-from cscie103_olap_oltp.contracts.verdict import Verdict
+from cscie103_olap_oltp.contracts.verdict import Decision, Verdict, Violation
 from cscie103_olap_oltp.policy.evaluate import evaluate_repository, opa_available
 
 # WITHOUT OPA THERE IS NO VERDICT, AND "no verdict" IS NOT "pass". Skipping is
@@ -98,3 +100,85 @@ def test_explain_is_human_readable_and_machine_derived() -> None:
     narrative that can drift from it."""
     verdict = evaluate_repository(opa_path="/nonexistent/opa")
     assert "POLICY_ENGINE_UNAVAILABLE" in verdict.explain()
+
+
+def test_every_decision_is_appended_to_the_ledger(tmp_path: Path) -> None:
+    """DECISIONS AS DATA REQUIRES AN ORDERED RECORD, NOT A PILE OF FILES.
+
+    Per-run artifacts answer "what did this run decide". Only a chain answers
+    "what has this platform decided, in what order, unaltered" -- which is the
+    question an audit actually asks.
+    """
+    from cscie103_olap_oltp.ledger import verify_chain
+    from cscie103_olap_oltp.policy.__main__ import record
+
+    ledger = tmp_path / "ledger.jsonl"
+    verdict = Verdict(
+        contract="repository/v1",
+        outcome="fail",
+        reason_code="POLICY_VIOLATIONS",
+        policy_revision="0" * 64,
+        violations=(Violation(id="R001", reason_code="X", message="m"),),
+        evidence=(),
+    )
+    decision = Decision(verdict=verdict, action="halt", reason_code="POLICY_VIOLATIONS")
+
+    record(decision, artifacts=tmp_path / "verdicts", ledger=ledger)
+
+    result = verify_chain(ledger)
+    assert result.entries == 1
+    assert result.intact
+
+
+def test_the_ledger_record_carries_the_outcome_and_action(tmp_path: Path) -> None:
+    """A RECORD THAT CANNOT BE QUERIED IS NOT DATA.
+
+    The payload has to carry the fields someone would filter on -- which
+    contract, what outcome, what the platform did about it.
+    """
+    import json
+
+    from cscie103_olap_oltp.policy.__main__ import record
+
+    ledger = tmp_path / "ledger.jsonl"
+    verdict = Verdict(
+        contract="repository/v1",
+        outcome="pass",
+        reason_code="POLICY_SATISFIED",
+        policy_revision="0" * 64,
+        violations=(),
+        evidence=(),
+    )
+    decision = Decision(verdict=verdict, action="publish", reason_code="POLICY_SATISFIED")
+
+    record(decision, artifacts=tmp_path / "verdicts", ledger=ledger)
+
+    payload = json.loads(ledger.read_text(encoding="utf-8").splitlines()[0])["payload"]
+    assert payload["contract"] == "repository/v1"
+    assert payload["outcome"] == "pass"
+    assert payload["action"] == "publish"
+
+
+def test_the_artifact_is_still_written(tmp_path: Path) -> None:
+    """THE CHAIN SUMMARISES; THE ARTIFACT CARRIES THE DETAIL.
+
+    Putting whole verdicts in the ledger would make every line enormous and the
+    chain unreadable, so the record points at the artifact rather than
+    duplicating it.
+    """
+    from cscie103_olap_oltp.policy.__main__ import record
+
+    artifacts = tmp_path / "verdicts"
+    verdict = Verdict(
+        contract="repository/v1",
+        outcome="pass",
+        reason_code="POLICY_SATISFIED",
+        policy_revision="0" * 64,
+        violations=(),
+        evidence=(),
+    )
+    decision = Decision(verdict=verdict, action="publish", reason_code="POLICY_SATISFIED")
+
+    written = record(decision, artifacts=artifacts, ledger=tmp_path / "ledger.jsonl")
+    assert written.is_file()
+    assert written.parent == artifacts

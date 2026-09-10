@@ -38,14 +38,19 @@ import re
 import subprocess
 import sys
 
+from cscie103_olap_oltp.environment import current
 from cscie103_olap_oltp.git.env import scrubbed_env
 
-# THE SSH HOST ALIAS Lightning writes into ~/.ssh/config. Using the alias rather
-# than a hostname keeps the identity file, keepalives and host-key policy in one
-# place that the CLI maintains.
-STUDIO_HOST = "serene-volhard-183"
-
-TEAMSPACE = "ltphongssvn/deploy-model-project"
+# THE STUDIO AND TEAMSPACE COME FROM THE ENVIRONMENT, NOT FROM HERE.
+#
+# Both were literals in this file AND in mise.toml -- the same deployment fact
+# written twice, and a module that worked for exactly one operator. A Studio
+# alias is per-person: hardcoding it means anyone who copies this file silently
+# targets someone else's machine.
+#
+# READ AT CALL TIME, NOT AT IMPORT. A module-level read freezes whatever the
+# environment was when the first import happened, which makes tests
+# order-dependent and monkeypatching useless.
 
 # ~/ltphongssvn RESOLVES INTO /teamspace/studios/this_studio, WHICH PERSISTS.
 # A Studio's ordinary home directory does not survive a restart, so a clone
@@ -122,7 +127,7 @@ def ssh_command() -> list[str]:
     runs to completion, which also bounds the exposure window of the forwarded
     agent to the length of one operation.
     """
-    return ["ssh", "-T", "-o", "ForwardAgent=yes", STUDIO_HOST, "bash", "-s"]
+    return ["ssh", "-T", "-o", "ForwardAgent=yes", current().lightning_studio, "bash", "-s"]
 
 
 def clone_script() -> str:

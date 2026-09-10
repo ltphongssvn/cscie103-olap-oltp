@@ -18,6 +18,14 @@
 # repository does not make. flake.lock is the lockfile.
 
 # --- Task interpreter ---------------------------------------------------------
+# LOCAL CONFIGURATION, LOADED FOR EVERY TASK.
+#
+# Twelve-Factor keeps config in the environment rather than in code. .env holds
+# this machine's endpoints, is gitignored, and is described by the committed
+# .env.example -- which environment.py generates, so the two cannot drift.
+[env]
+_.file = ".env"
+
 [task_config]
 # EVERY TASK RUNS INSIDE THE NIX DEVSHELL. Without it `uv`, `opa` and the rest
 # are unresolvable, because nothing puts them on PATH for a task body. R002
@@ -189,7 +197,17 @@ description = "Authenticate this machine to Databricks (interactive, one-time)"
 # variables, then the DEFAULT profile, stopping at the first success -- so a
 # laptop falls through to DEFAULT and CI stops at its own env vars. Identical
 # code runs in both, with no heuristic to get wrong.
-run = "databricks auth login --host https://dbc-c7e8aa56-e393.cloud.databricks.com --profile DEFAULT"
+# THE HOST COMES FROM THE ENVIRONMENT, having been a literal here AND in
+# ci.yml. `mise` exports .env for tasks, so DATABRICKS_HOST is already set.
+run = 'databricks auth login --host "$DATABRICKS_HOST" --profile DEFAULT'
+
+[tasks."env:template"]
+description = "Regenerate .env.example from the settings model"
+# THE CONTRACT IS DERIVED, NOT MAINTAINED. A hand-written template drifts the
+# moment someone adds a variable and forgets it -- the documented number-one
+# "works on my machine" bug. Here the model is the source and this renders it;
+# the gate refuses a committed copy that disagrees.
+run = "uv run python -m cscie103_olap_oltp.environment --template"
 
 [tasks."env:describe"]
 description = "Report which environment variables are set, never their values"
@@ -387,7 +405,7 @@ description = "Open an interactive shell on the Lightning Studio"
 #
 # If a git operation is genuinely needed from inside the shell, use cloud:pull
 # from the laptop instead.
-run = 'ssh serene-volhard-183'
+run = 'ssh "$LIGHTNING_STUDIO"'
 
 # --- Workflow -----------------------------------------------------------------
 

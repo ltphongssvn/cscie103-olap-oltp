@@ -117,7 +117,12 @@ jobs:
           # in the secret store would imply a sensitivity they do not have and
           # make the workflow harder to read.
           DATABRICKS_AUTH_TYPE: oauth-m2m
-          DATABRICKS_HOST: https://dbc-c7e8aa56-e393.cloud.databricks.com
+          # A RUNNER HAS NO .env, so the deploy supplies its own config here.
+          # That is Twelve-Factor working as intended: one codebase, config
+          # varying per environment -- not the same literal in two files.
+          DATABRICKS_HOST: ${{ vars.DATABRICKS_HOST }}
+          LIGHTNING_STUDIO: ${{ vars.LIGHTNING_STUDIO }}
+          LIGHTNING_TEAMSPACE: ${{ vars.LIGHTNING_TEAMSPACE }}
           DATABRICKS_CLIENT_ID: 72cd81b2-72dc-47fe-9a66-b238cb2b8330
 
           # THE ONLY SECRET. Bounded at 90 days, because a credential with no

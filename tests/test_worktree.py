@@ -16,7 +16,12 @@ from pathlib import Path
 
 import pytest
 
-from cscie103_olap_oltp.git.worktree import parse_records, sibling_name, validate_slug
+from cscie103_olap_oltp.git.worktree import (
+    parse_records,
+    sibling_name,
+    validate_slug,
+    worktree_parent,
+)
 
 
 def _run(*args: str, cwd: Path) -> None:
@@ -125,11 +130,69 @@ def test_parse_records_rejects_an_unknown_attribute(tmp_path: Path) -> None:
         parse_records(root, _raw=b"worktree /a\0surprise value\0\0")
 
 
-def test_parse_records_refuses_a_bare_repository(tmp_path: Path) -> None:
-    """The sibling layout composes paths from a parent checkout.
+def test_parse_records_accepts_a_bare_repository(tmp_path: Path) -> None:
+    """THE OLD TEST ASSERTED THE BUG, WHICH IS WHY IT SURVIVED SO LONG.
 
-    A bare repository has none, so the naming scheme has nothing to build on.
+    It required parse_records to REFUSE a bare parent, encoding the claim that
+    the sibling layout needs a parent checkout. Every worktree in this project
+    hangs off a bare parent, so the refusal made `worktree:remove` unusable --
+    and the test made the refusal look deliberate.
+
+    A test that pins a limitation in place is worse than no test: it converts a
+    fixable defect into a documented decision.
     """
     root = _repo(tmp_path)
-    with pytest.raises(SystemExit, match="bare"):
-        parse_records(root, _raw=b"worktree /a\0bare \0\0")
+    records = parse_records(
+        root,
+        _raw=b"worktree /x/project.git\0bare\0\0",
+    )
+    assert "bare" in records[0]
+
+
+def test_a_bare_parent_is_accepted(tmp_path: Path) -> None:
+    """THE LAYOUT THIS PROJECT ACTUALLY USES, AND THE PARSER REFUSED IT.
+
+    `parse_records` rejected any inventory whose first record is bare, reasoning
+    that the sibling layout composes paths from a parent checkout. That is half
+    right: a bare repository has no working tree, but it still has a PATH, and
+    `<repo>-<slug>` beside it is exactly the naming already in use here.
+
+    The refusal cost `worktree:remove` entirely -- every worktree in this
+    repository hangs off a bare parent, so the verb could never run. Tooling
+    elsewhere reached the same conclusion and simply removed the block, skipping
+    only the checks that need a working tree.
+    """
+    bare = tmp_path / "project.git"
+    _run("git", "init", "-q", "--bare", "-b", "main", str(bare), cwd=tmp_path)
+
+    records = parse_records(bare)
+    assert records
+    assert "bare" in records[0]
+
+
+def test_the_sibling_base_comes_from_git_not_from_a_path_guess(tmp_path: Path) -> None:
+    """THE LAYOUT IS ASKED OF GIT, NOT INFERRED FROM DIRECTORY NAMES.
+
+    Stripping a ".git" suffix is exactly the path-name inference a 2026 bug
+    report names as the defect: git records the layout explicitly, and reading
+    it is what works for every arrangement rather than the ones whose names
+    happen to follow a convention.
+    """
+    bare = tmp_path / "project.git"
+    _run("git", "init", "-q", "--bare", "-b", "main", str(bare), cwd=tmp_path)
+
+    assert worktree_parent(bare) == tmp_path
+
+
+def test_a_normal_parent_is_unaffected(tmp_path: Path) -> None:
+    """A FIX FOR THE BARE CASE MUST NOT BREAK THE ORDINARY ONE."""
+    root = tmp_path / "project"
+    root.mkdir()
+    _run("git", "init", "-q", "-b", "main", cwd=root)
+
+    assert worktree_parent(root) == tmp_path
+
+
+def test_sibling_naming_is_unchanged(tmp_path: Path) -> None:
+    """<repo>-<slug>, beside the parent, in both layouts."""
+    assert sibling_name(Path("/x/project"), "star-schema") == Path("/x/project-star-schema")

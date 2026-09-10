@@ -20,11 +20,8 @@
 # --- Task interpreter ---------------------------------------------------------
 [task_config]
 # EVERY TASK RUNS INSIDE THE NIX DEVSHELL. Without it `uv`, `opa` and the rest
-# are unresolvable, because nothing puts them on PATH for a task body.
-#
-# THE ALTERNATIVE WAS `nix develop --command` AT EVERY CALL SITE: every task
-# body, every hook job and the CI workflow, each depending on someone
-# remembering. R002 enforces it.
+# are unresolvable, because nothing puts them on PATH for a task body. R002
+# enforces it.
 #
 # THE SHELL IS ALSO PINNED. mise defaults to `sh`, which is bash-in-POSIX-mode
 # on macOS and dash on the Ubuntu runner: same task body, different interpreter,
@@ -112,18 +109,14 @@ run = "uv run python -m cscie103_olap_oltp.policy"
 [tasks."check:hygiene"]
 description = "Refuse tracked files that look like accidents"
 # THIS REPOSITORY ALREADY COMMITTED ONE: a zero-byte file named `....` from a
-# misfired heredoc, staged by `git add -A` and caught by reading the commit
-# output rather than by any gate.
+# misfired heredoc, caught by reading the commit output rather than by a gate.
 run = "uv run python -m cscie103_olap_oltp.hygiene"
 
 [tasks."check:pii"]
 description = "Scan tracked files for personal data, by CONTENT"
 # .gitignore filters by FORMAT and check:hygiene by PATH; both are proxies for a
-# rule about CONTENT. An HTML export of an executed notebook carries names and
-# salaries in its cell outputs and matches no rule at all.
-#
-# NO ALLOWLIST, EVER. `git rm` does not remove data from history, so a
-# suppressed finding is a leak that has stopped being reported.
+# rule about CONTENT. NO ALLOWLIST, EVER: `git rm` does not remove data from
+# history, so a suppressed finding is a leak that stopped being reported.
 run = "uv run python -m cscie103_olap_oltp.pii"
 
 [tasks."check:secrets"]
@@ -148,8 +141,6 @@ run = "uv run python -m cscie103_olap_oltp.databricks env-parity"
 
 [tasks."check:prereqs"]
 description = "Verify the unmanaged dependencies the bundle relies on"
-# Without this a missing prerequisite surfaces as a deploy failure with an API
-# error naming the symptom rather than the cause.
 run = "uv run python -m cscie103_olap_oltp.databricks prereqs"
 
 [tasks."check:ruleset"]
@@ -185,33 +176,55 @@ run = "uv run python -m cscie103_olap_oltp.gates --offline"
 [tasks."bundle:validate"]
 description = "Resolve the bundle against the workspace (fixture target)"
 # THE FIXTURE TARGET, NOT dev. It resolves without deployer identity, so the
-# output is the same on a laptop and a runner -- which is what makes it usable
-# as a stable snapshot for the gates that read it.
+# output is the same on a laptop and a runner.
 run = "databricks bundle validate -t fixture"
 
 [tasks."bundle:deploy"]
 description = "Deploy the bundle to the dev target"
-# dev IS THE DEFAULT TARGET so an unqualified deploy cannot reach prod by
-# accident. Naming it here anyway makes the intent explicit at the call site.
 run = "databricks bundle deploy -t dev"
 
 [tasks."auth:login"]
 description = "Authenticate this machine to Databricks (interactive, one-time)"
-# WRITES THE DEFAULT PROFILE, NOT A NAMED ONE, AND THAT IS THE WHOLE POINT.
-# The CLI resolves environment variables, then the DEFAULT profile, stopping at
-# the first success -- so a laptop falls through to DEFAULT and CI stops at its
-# own env vars. Identical code runs in both.
-#
-# A NAMED profile must be selected with -p, which needs a heuristic to decide
-# when to pass it, which must be right in every environment. The sibling project
-# shipped that and spent four CI failures unwinding it.
+# WRITES THE DEFAULT PROFILE, NOT A NAMED ONE. The CLI resolves environment
+# variables, then the DEFAULT profile, stopping at the first success -- so a
+# laptop falls through to DEFAULT and CI stops at its own env vars. Identical
+# code runs in both, with no heuristic to get wrong.
 run = "databricks auth login --host https://dbc-c7e8aa56-e393.cloud.databricks.com --profile DEFAULT"
 
 [tasks."auth:describe"]
 description = "Report which credentials the CLI resolved, and from where"
-# THE DIAGNOSTIC THAT ENDS AUTH DEBUGGING LOOPS: it reports the resolved auth
-# type and the SOURCE of every field.
 run = "databricks auth describe"
+
+# --- Bootstrap ----------------------------------------------------------------
+# THE ORDERING IS EXECUTABLE, NOT REMEMBERED. Each step depends on the one
+# before, and running them out of order fails in ways that read as unrelated
+# bugs -- a missing catalog looks like a broken grant.
+
+[tasks."bootstrap:catalog"]
+description = "Create this project's Unity Catalog catalog (idempotent)"
+# NOT A BUNDLE RESOURCE ON THIS TIER. Declaring a catalog in the bundle fails
+# with "Metastore storage root URL does not exist" -- databricks/cli#4513,
+# closed as not planned.
+run = "uv run python -m cscie103_olap_oltp.catalog"
+
+[tasks."bootstrap:identity"]
+description = "Create the group and service principal, and reconcile grants"
+# REPORTS PENDING RATHER THAN SUCCESS when the catalog does not exist yet.
+# Exit 2 means "deploy, then run me again"; exit 1 means something is broken.
+run = "uv run python -m cscie103_olap_oltp.identity"
+
+[tasks.bootstrap]
+description = "Bring a fresh workspace to a deployable state, in dependency order"
+# The last step is not redundant: grants target the catalog, and running
+# identity again after the deploy is what makes the sequence converge in one
+# command instead of two rounds of manual retry.
+run = '''
+set -euo pipefail
+mise run bootstrap:catalog
+mise run bootstrap:identity
+mise run bundle:deploy
+mise run bootstrap:identity
+'''
 
 # --- Onboarding ---------------------------------------------------------------
 
@@ -219,8 +232,7 @@ run = "databricks auth describe"
 description = "One-command onboarding: dependencies and git hooks"
 # `lefthook install` writes into .git/hooks, which is NOT version controlled. A
 # fresh clone has no hooks at all, so the person who most needs the guardrails
-# is the one running without them. worktree:add runs this for the same reason:
-# git copies none of it.
+# is the one running without them.
 #
 # NEVER ADD -f TO lefthook install. Without it, lefthook declines when
 # core.hooksPath points elsewhere. With it, lefthook force-installs into
@@ -302,6 +314,70 @@ gh api "repos/{owner}/{repo}/rulesets" \
   --jq '.[] | {id, name, enforcement}'
 '''
 
+# --- Lightning AI (the third copy) ---------------------------------------------
+#
+#     laptop  --push-->  GitHub  <--pull--  Lightning Studio
+#
+# THE REPOSITORY IS THE SOURCE OF TRUTH; the Studio is only where execution
+# happens. Code travels via git and never by copying files, so the three copies
+# cannot drift -- and "in sync" is a fact anyone can check rather than a belief
+# about what was last uploaded.
+#
+# `lightning cp` IS THE REJECTED ALTERNATIVE. It works, and it produces exactly
+# that drift: an uploaded file has no commit and no history, so nothing can say
+# which version the Studio is running.
+#
+# NO DEPENDENCY ON THE LIGHTNING SDK IS TAKEN. Sync needs ssh and git, both of
+# which the Studio already has. Adding the SDK for a status command would put a
+# package in the lockfile to answer a question `ssh` answers by succeeding.
+
+[tasks."cloud:clone"]
+description = "Create the Studio's clone of this repository (idempotent)"
+# ONE-TIME IN PRACTICE, RE-RUNNABLE BY DESIGN. A bootstrap that only works on a
+# clean machine is one nobody re-runs, and a bootstrap nobody re-runs cannot
+# reconcile anything.
+run = "uv run python -m cscie103_olap_oltp.cloud clone"
+
+[tasks."cloud:pull"]
+description = "Fast-forward the Studio to origin/develop, and report the commit"
+# --ff-only, so divergence is a loud failure rather than a third head. The
+# output is a commit hash rather than a success message, because the question
+# being answered is whether three copies are the same.
+run = "uv run python -m cscie103_olap_oltp.cloud pull"
+
+[tasks."cloud:status"]
+description = "Show where all three copies are, so drift is visible rather than assumed"
+# THE ONE COMMAND THAT ANSWERS THE ACTUAL QUESTION. Local, remote and Studio
+# each report their develop tip; three identical hashes mean synchronised, and
+# anything else names which copy is behind.
+run = '''
+set -euo pipefail
+
+echo "--- laptop ---"
+git log --oneline -1 develop
+
+echo
+echo "--- github ---"
+git ls-remote origin refs/heads/develop | cut -c1-7
+
+echo
+echo "--- lightning studio ---"
+uv run python -m cscie103_olap_oltp.cloud pull
+'''
+
+[tasks."cloud:ssh"]
+description = "Open an interactive shell on the Lightning Studio"
+# NO AGENT FORWARDING HERE, DELIBERATELY, AND THAT DIFFERS FROM cloud:pull.
+#
+# An interactive shell is open for as long as someone leaves it open, and a host
+# you forward to can request signatures for any key the agent holds. The 2026
+# guidance is to keep the exposure window to the length of one operation --
+# which the non-interactive sync tasks do by construction and a shell cannot.
+#
+# If a git operation is genuinely needed from inside the shell, use cloud:pull
+# from the laptop instead.
+run = 'ssh serene-volhard-183'
+
 # --- Workflow -----------------------------------------------------------------
 
 [tasks.pr]
@@ -316,10 +392,8 @@ run = "gh pr view --json number,title,mergeable,mergeStateStatus,statusCheckRoll
 
 [tasks.sync]
 description = "Return to develop, pull, and remove branches that are safe to remove"
-# STATE-DRIVEN, NOT A PIPELINE. Piping `git for-each-ref` through awk and
-# deleting whatever reports [gone] works until a worktree holds one of those
-# branches: git refuses -- correctly -- and the task ABORTS after the pull has
-# already succeeded, leaving the sync half done.
+# STATE-DRIVEN, NOT A PIPELINE. Deleting whatever reports [gone] aborts when a
+# worktree holds one of those branches -- after the pull has already succeeded.
 run = "uv run python -m cscie103_olap_oltp.git.sync"
 
 [tasks.status]
@@ -414,42 +488,3 @@ usage = '''
 arg "<slug>" help="The slug used with worktree:add"
 '''
 run = 'uv run python -m cscie103_olap_oltp.git.worktree refresh "${usage_slug?}"'
-
-# --- Bootstrap ----------------------------------------------------------------
-# THE ORDERING IS EXECUTABLE, NOT REMEMBERED. Each step depends on the one
-# before, and running them out of order fails in ways that read as unrelated
-# bugs -- a missing catalog looks like a broken grant, a missing group looks
-# like a permissions problem.
-#
-# EVERY STEP IS IDEMPOTENT, so this converges rather than needing a clean slate.
-
-[tasks."bootstrap:catalog"]
-description = "Create this project's Unity Catalog catalog (idempotent)"
-# NOT A BUNDLE RESOURCE ON THIS TIER. Declaring a catalog in the bundle fails
-# with "Metastore storage root URL does not exist" -- databricks/cli#4513, closed
-# as not planned. `CREATE CATALOG IF NOT EXISTS` with no location resolves
-# storage from Default Storage and works.
-run = "uv run python -m cscie103_olap_oltp.catalog"
-
-[tasks."bootstrap:identity"]
-description = "Create the group and service principal, and reconcile grants"
-# REPORTS PENDING RATHER THAN SUCCESS when the catalog does not exist yet, so a
-# partial reconcile cannot look like a finished one. Exit 2 means "deploy, then
-# run me again"; exit 1 means something is broken.
-run = "uv run python -m cscie103_olap_oltp.identity"
-
-[tasks.bootstrap]
-description = "Bring a fresh workspace to a deployable state, in dependency order"
-# CATALOG BEFORE IDENTITY BEFORE DEPLOY, and identity again afterwards.
-#
-# The last step is not redundant: grants target the catalog, and on a workspace
-# where the schemas did not exist the first identity pass has nothing to grant
-# on beyond the catalog itself. Running it again after the deploy is what makes
-# the sequence converge in one command instead of two rounds of manual retry.
-run = '''
-set -euo pipefail
-mise run bootstrap:catalog
-mise run bootstrap:identity
-mise run bundle:deploy
-mise run bootstrap:identity
-'''

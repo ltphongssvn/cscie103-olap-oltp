@@ -4,19 +4,13 @@
 # EVERY PROJECT OPERATION IS A TASK. Not a remembered command, not a paste from
 # scrollback. A one-off CLI invocation is behaviour that exists only in one
 # person's shell history: untested, undiscoverable, impossible to change
-# deliberately, and invisible to review. `gh pr checks --watch` typed by hand is
-# the same category of problem as a clicked setting in a web UI.
+# deliberately, and invisible to review.
 #
 # --- WHY THERE IS NO [tools] BLOCK --------------------------------------------
 #
 # The sibling project pinned nine tools here AND declared the same nine in
 # flake.nix: two declarations of one fact, which is the drift this repository
-# exists to remove, reproduced at its centre. It then needed a parity-checking
-# script to bridge the gap. This repo starts without the duplication rather than
-# adding a gate to police it.
-#
-# policies/repo/repo.rego R001 ENFORCES THAT ABSENCE, so the reasoning above
-# cannot quietly stop being true.
+# exists to remove, reproduced at its centre. R001 enforces the absence.
 #
 # THERE IS ALSO NO [settings] BLOCK. `lockfile = true` and `install_before`
 # govern mise's TOOL INSTALLATION. With no tools to install they enforce
@@ -25,25 +19,20 @@
 
 # --- Task interpreter ---------------------------------------------------------
 [task_config]
-# EVERY TASK RUNS INSIDE THE NIX DEVSHELL. This line is what makes the toolchain
-# work at all: without it `uv`, `opa` and the rest are unresolvable, because
-# nothing puts them on PATH for a task body.
+# EVERY TASK RUNS INSIDE THE NIX DEVSHELL. Without it `uv`, `opa` and the rest
+# are unresolvable, because nothing puts them on PATH for a task body.
 #
 # THE ALTERNATIVE WAS `nix develop --command` AT EVERY CALL SITE: every task
 # body, every hook job and the CI workflow, each depending on someone
 # remembering. One forgotten call site is a task that works for whoever happens
-# to be inside a shell already and fails for everyone else. One boundary,
-# declared once. R002 enforces it.
+# to be inside a shell already and fails for everyone else. R002 enforces it.
 #
 # THE SHELL IS ALSO PINNED. mise defaults to `sh`, which is bash-in-POSIX-mode
 # on macOS and dash on the Ubuntu runner: same task body, different interpreter,
 # green locally and dead in CI.
 #
 # BASH DOES NOT SET errexit, WHICH IS WHY EVERY MULTI-COMMAND TASK BELOW OPENS
-# WITH `set -euo pipefail`. mise's own default includes errexit and pipefail;
-# overriding the shell discards them. A multi-command task without it reports
-# the exit code of its LAST command, so an earlier failure passes silently.
-# R004 enforces it.
+# WITH `set -euo pipefail`. R004 enforces it.
 shell = "nix develop --command bash -c"
 
 # --- Nix ----------------------------------------------------------------------
@@ -58,13 +47,16 @@ description = "Evaluate the flake on every supported platform"
 # and a package present on Darwin but not Linux passes locally and breaks on the
 # runner.
 #
-# --no-build evaluates derivations without realising them: seconds rather than a
-# toolchain download. IT PROVES NAMES RESOLVE, NOT THAT THEY BUILD. The unfree
-# licence on databricks-cli is checked at REALISATION, so it passed three green
-# platforms here and would have failed on the first real `nix develop`.
+# --no-build PROVES NAMES RESOLVE, NOT THAT THEY BUILD. The unfree licence on
+# databricks-cli is checked at REALISATION, so it passed three green platforms
+# here and would have failed on the first real `nix develop`.
 run = "nix flake check --no-build --all-systems"
 
-# --- Gates --------------------------------------------------------------------
+# --- Individual gates ---------------------------------------------------------
+#
+# EACH IS ITS OWN TASK so it works standalone during iteration. `check`
+# AGGREGATES them via src/cscie103_olap_oltp/gates.py; it does not replace them,
+# and there is no second copy of the list to drift.
 #
 # EVERY TASK RUNS PYTHON THROUGH uv, NEVER BARE python3. A bare interpreter name
 # is PATH resolution, and PATH is ambient state this repo does not control.
@@ -73,17 +65,16 @@ run = "nix flake check --no-build --all-systems"
 [tasks.fmt]
 description = "Apply every safe autofix: formatting AND import ordering"
 # TWO OPERATIONS, NOT ONE. `ruff format` handles layout; import ORDERING is the
-# I lint rule, fixed by `ruff check --fix`. Treating fmt as though it covered
-# both makes every import change a hand edit lint catches afterwards.
+# I lint rule, fixed by `ruff check --fix`.
 #
-# `;` NOT `&&`, AND NOT `set -e`. ruff check --fix exits non-zero when a finding
-# has no safe autofix, which with && would stop the formatter running -- and the
-# formatter is often what resolves the remaining finding, since line-length is
-# fixed by rewrapping. The `lint` gate still reports both, so nothing is hidden.
+# `;` NOT `&&`. ruff check --fix exits non-zero when a finding has no safe
+# autofix, which with && would stop the formatter running -- and the formatter
+# is often what resolves the remaining finding, since line-length is fixed by
+# rewrapping.
 run = "uv run ruff check --fix . ; uv run ruff format ."
 
 [tasks.lint]
-description = "Lint (the same invocation CI uses)"
+description = "Lint (the same invocation the gate runner uses)"
 # WITHOUT --fix, DELIBERATELY. A CI job that fixes its own input can pass while
 # the committed code stays wrong.
 run = "uv run ruff check ."
@@ -92,9 +83,7 @@ run = "uv run ruff check ."
 description = "Static type check, for every platform this code runs on"
 # BOTH PLATFORMS, DELIBERATELY. mypy defaults to whichever OS it runs on and
 # NARROWS sys.platform comparisons, so a Darwin-only branch is invisible to a
-# Linux run and vice versa. This repo is a macOS laptop plus a Linux runner;
-# either gap is a branch nobody checks. mypy has no native multi-platform mode,
-# so invoking it once per target is the documented approach.
+# Linux run and vice versa.
 run = '''
 set -euo pipefail
 uv run mypy --platform darwin src tests
@@ -103,8 +92,6 @@ uv run mypy --platform linux src tests
 
 [tasks.test]
 description = "Hermetic tests: no network, no credentials"
-# addopts in pyproject.toml deselects the integration marker, so this is safe
-# behind a git hook.
 run = "uv run pytest"
 
 [tasks."test:integration"]
@@ -133,39 +120,63 @@ description = "Evaluate this repo against its own policies, and record the verdi
 # THE SPLIT THAT IS KEPT, BECAUSE IT IS A DIFFERENCE IN KIND:
 #   check:policy            are the policies well-formed and tested?
 #   check:policy-decisions  does the CODEBASE satisfy them?
-#
-# A policy suite can be immaculate and enforce nothing. Only evaluating real
-# input proves the repository obeys its own rules.
 run = "uv run python -m cscie103_olap_oltp.policy"
+
+[tasks."check:secrets"]
+description = "Scan the FULL HISTORY for committed credentials"
+# FULL HISTORY, NOT THE WORKING TREE. A pre-commit hook only ever sees the
+# incoming change, so anything committed before hooks existed -- or pushed with
+# --no-verify -- has never been scanned.
+#
+# betterleaks rather than gitleaks: same author, MIT, drop-in, and gitleaks now
+# receives security patches only.
+run = "betterleaks git ."
+
+[tasks."check:deps"]
+description = "Scan uv.lock for known vulnerabilities"
+run = "osv-scanner scan source --lockfile uv.lock"
+
+[tasks."check:workflow"]
+description = "Audit the GitHub Actions workflow that runs the gate"
+run = "zizmor .github/workflows/ci.yml"
 
 [tasks."check:ruleset"]
 description = "Verify develop and main are actually protected on the server"
 # CHECKS THE RULESET'S CONTENTS, NOT ITS EXISTENCE. One edited to require
 # nothing is the failure mode that looks like success -- and this repository
 # opened its first pull request in exactly that state.
-#
-# NOT A DEPENDENCY OF `check`. It needs network and gh auth, and a local commit
-# cannot weaken a server-side ruleset. CI runs it as its own step.
 run = "uv run python -m cscie103_olap_oltp.policy.check_ruleset"
+
+# --- The gate -----------------------------------------------------------------
 
 [tasks.check]
 description = "The quality gate. CI runs exactly this task; nothing is restated in ci.yml"
-# SINGLE SOURCE OF TRUTH. A second copy of the gate list in ci.yml drifts the
-# moment a check is added here and forgotten there. R008 enforces that ci.yml
-# does not restate these.
+# DELEGATES TO A RUNNER, HAVING ORIGINALLY CHAINED WITH &&.
 #
-# NOT depends = [...]. mise runs dependencies in PARALLEL with no order and
-# reports failure as soon as one fails, so a slower gate can never report at
-# all. A gate whose result is never printed is indistinguishable from one that
-# passed. Serial and slower, deliberately.
-run = '''
-set -euo pipefail
-mise run lint
-mise run types
-mise run test
-mise run check:policy
-mise run check:policy-decisions
-'''
+# The chain stopped at the first failure, which produces fix-one, re-run,
+# discover-the-next -- a treadmill built into the gate. It hid real findings
+# during this project's own construction: five mypy errors were invisible until
+# lint passed, and four ruff errors were invisible until the write before that.
+#
+# gates.py runs every gate to completion and reports ALL failures in one pass.
+# Serial and slower, deliberately: on a gate that runs on every commit, telling
+# the whole truth beats a few seconds.
+#
+# NOT depends = [...] EITHER. mise runs dependencies in PARALLEL with no order
+# and reports failure as soon as one fails, so a slower gate may never report at
+# all -- and a gate whose result is never printed is indistinguishable from one
+# that passed.
+run = "uv run python -m cscie103_olap_oltp.gates"
+
+[tasks."check:offline"]
+description = "The gate minus anything needing network (git hooks)"
+# SAME LIST, FILTERED -- not a second list. gates.py marks each gate with
+# whether it needs the network; --offline selects the rest.
+#
+# WHY HOOKS DO NOT RUN THE FULL GATE: a pre-push that fails on a plane is one
+# people bypass with --no-verify, and a bypassed hook catches nothing. CI runs
+# the full gate; that is the layer where a bypass is caught.
+run = "uv run python -m cscie103_olap_oltp.gates --offline"
 
 # --- Onboarding ---------------------------------------------------------------
 
@@ -180,10 +191,6 @@ description = "One-command onboarding: dependencies and git hooks"
 # core.hooksPath points elsewhere. With it, lefthook force-installs into
 # whatever that path resolves to -- and when that is a GLOBAL hooks directory,
 # this repo's hooks start running in every repository on the machine.
-#
-# THE QUOTING IS LOAD-BEARING. TOML basic strings treat backslash as an escape
-# opener, so a shell body containing a backslash fails to parse. Literal strings
-# (three single quotes) do no escape processing.
 run = '''
 set -euo pipefail
 
@@ -223,15 +230,10 @@ fi
 description = "Apply repository settings and branch ruleset (idempotent)"
 # REPOSITORY SETTINGS ARE INFRASTRUCTURE. Clicked in a web UI they are invisible
 # to the repo, unreviewable and unreproducible -- and this repository shipped
-# its first pull request with NO protection and NO required check, which is the
-# failure that motivated writing this down.
+# its first pull request with NO protection and NO required check.
 #
 # MERGE COMMITS ONLY: GitFlow depends on merge topology, and squashing would
 # collapse commits whose reasoning is the most valuable thing in this history.
-#
-# THE RULESET IS A COMMITTED CONTRACT, NOT AN INLINE PAYLOAD. Keeping it in
-# contracts/ makes a change to branch protection a reviewable diff, and
-# check:ruleset verifies the server still matches it.
 run = '''
 set -euo pipefail
 
@@ -270,8 +272,7 @@ gh api "repos/{owner}/{repo}/rulesets" \
 [tasks.pr]
 description = "Open a PR and block until it is merged"
 # BLOCKS, DELIBERATELY. Enabling auto-merge and returning moves the cost to the
-# person, who then watches the Actions tab and confirms the merge by hand on
-# every pull request.
+# person, who then watches the Actions tab and confirms the merge by hand.
 #
 # Three phases, because waiting for checks to APPEAR and waiting for them to
 # FINISH are different problems, and the rollup lags both. Each is bounded.
@@ -287,9 +288,6 @@ description = "Return to develop, pull, and remove branches that are safe to rem
 # deleting whatever reports [gone] works until a worktree holds one of those
 # branches: git refuses -- correctly -- and the task ABORTS after the pull has
 # already succeeded, leaving the sync half done.
-#
-# The plan is computed before anything is deleted, and every branch that cannot
-# be removed is reported WITH THE REASON.
 run = "uv run python -m cscie103_olap_oltp.git.sync"
 
 [tasks.status]
@@ -313,9 +311,8 @@ git log --oneline develop..HEAD 2>/dev/null || echo "(on develop)"
 [tasks."start:check"]
 description = "Refuse to work on a protected branch"
 # Wired into the pre-commit hook so the guard fires before a commit lands rather
-# than after. Fails closed, which is what an unattended run needs: it will not
-# notice a warning, but it will notice a non-zero exit. R011 enforces that the
-# hook keeps calling it.
+# than after. Fails closed, which is what an unattended run needs. R011 enforces
+# that the hook keeps calling it.
 run = '''
 set -euo pipefail
 branch="$(git rev-parse --abbrev-ref HEAD)"
@@ -338,10 +335,6 @@ description = "Cut a feature branch from origin/develop in THIS shell"
 # in a subshell and cannot change the invoking shell's branch:
 #
 #   eval "$(mise run start:here <slug>)"
-#
-# The sibling project shipped a `start` task that ran `git switch -c` directly;
-# the switch died with the subshell, the caller stayed on develop, and the task
-# printed "on feature/x" and reported success.
 usage = '''
 arg "<slug>" help="Short kebab-case description, e.g. oltp-contracts"
 '''

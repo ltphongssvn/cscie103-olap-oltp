@@ -8,14 +8,13 @@
 #
 # THE STAGING, AND WHY IT IS NOT "RUN EVERYTHING EVERYWHERE"
 #   pre-commit  fast and offline: branch guard, format, lint. Seconds.
-#   pre-push    medium: types and tests, still offline.
-#   CI          the full gate, including anything needing network or credentials.
+#   pre-push    the offline gate: types, tests, policy, secrets, dependencies.
+#   CI          everything, including the gates that need the network.
 #
 # The hook nobody runs is worse than the slower hook that still catches things.
-# A pre-commit needing Databricks auth fails on a plane, and a hook that fails on
-# a plane is a hook people bypass with --no-verify -- at which point it catches
-# nothing at all. A local commit cannot invalidate server-side state, so nothing
-# is lost by deferring those checks.
+# A pre-push that fails on a plane is one people bypass with --no-verify -- at
+# which point it catches nothing at all. `check:offline` is the SAME list as
+# `check`, filtered by a flag each gate declares, so the two cannot drift.
 #
 # CI IS DELIBERATELY BROADER THAN THESE HOOKS, NOT A MIRROR OF THEM. A hook only
 # ever sees the incoming change, and --no-verify skips it entirely. CI is the
@@ -47,5 +46,8 @@ pre-commit:
 
 pre-push:
   jobs:
-    - name: gate
-      run: mise run check
+    # THE OFFLINE GATE, NOT A HAND-PICKED SUBSET. Naming individual gates here
+    # would be a second copy of a list that lives in gates.py, and it would drift
+    # the moment a gate is added there and forgotten here.
+    - name: gate (offline)
+      run: mise run check:offline

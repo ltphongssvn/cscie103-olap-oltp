@@ -14,16 +14,20 @@ for committing.
 THE VIOLATIONS SHARE THE Violation CONTRACT with everything else in this
 project, so a protection failure aggregates alongside a data-quality failure
 rather than living in its own reporting dialect.
+
+NO subprocess HERE ANY MORE. Calling gh directly with check=True turned an
+authentication failure into a CalledProcessError naming only the command and
+exit 4 -- a traceback that reads like a missing ruleset. git/ghcli.py owns that
+translation now, in one place, so the meaning of an exit code cannot drift
+between call sites.
 """
 
 from __future__ import annotations
 
-import json
-import shutil
-import subprocess
 from typing import Any
 
 from cscie103_olap_oltp.contracts.verdict import Violation
+from cscie103_olap_oltp.git.ghcli import GhError, gh_json
 
 # THE CI JOB NAME, WHICH IS ALSO THE REQUIRED CHECK CONTEXT. GitHub matches
 # required checks by this exact string and does NOT warn when a renamed job
@@ -131,38 +135,19 @@ def fetch_ruleset(name: str = RULESET_NAME) -> dict[str, Any]:
     RAISES ON ABSENCE. Returning an empty document would flow into
     ruleset_violations() and produce a tidy list of findings that describe
     nothing -- the check would appear to have run against a real ruleset.
-    """
-    if shutil.which("gh") is None:
-        raise RuntimeError("gh is not on PATH; run inside `nix develop`")
 
-    # NO noqa HERE, AND THAT ASYMMETRY IS THE POINT. Ruff distinguishes a
-    # literal argument list from a computed one: this call takes only string
-    # literals, so S603 does not fire. The second call interpolates an id and
-    # does fire. Suppressing both would hide the distinction the linter is
-    # drawing.
-    listing = subprocess.run(
-        ["gh", "api", "repos/{owner}/{repo}/rulesets"],  # noqa: S607
-        capture_output=True,
-        text=True,
-        check=True,
-    )
-    matches = [item for item in json.loads(listing.stdout) if item.get("name") == name]
+    AUTHENTICATION FAILURE IS A DIFFERENT OUTCOME and propagates as
+    NotAuthenticated from ghcli, so a caller can skip rather than report a
+    protection failure that was never measured.
+    """
+    listing = gh_json("api", "repos/{owner}/{repo}/rulesets")
+    matches = [item for item in listing if item.get("name") == name]
     if not matches:
-        raise RuntimeError(f"no ruleset named {name!r} exists on the server")
+        raise GhError(f"no ruleset named {name!r} exists on the server")
 
     # THE LIST ENDPOINT OMITS `rules` AND `conditions`. Judging its output would
     # report every rule as missing -- a false failure that teaches people to
     # ignore the check. The detail endpoint is the one that carries them.
-    #
-    # S603 IS SUPPRESSED NARROWLY: the interpolated value is an integer id read
-    # from the GitHub API's own response, never from user input, and the command
-    # is a fixed argument list with no shell.
     ruleset_id = matches[0]["id"]
-    detail = subprocess.run(  # noqa: S603
-        ["gh", "api", f"repos/{{owner}}/{{repo}}/rulesets/{ruleset_id}"],  # noqa: S607
-        capture_output=True,
-        text=True,
-        check=True,
-    )
-    result: dict[str, Any] = json.loads(detail.stdout)
-    return result
+    detail: dict[str, Any] = gh_json("api", f"repos/{{owner}}/{{repo}}/rulesets/{ruleset_id}")
+    return detail

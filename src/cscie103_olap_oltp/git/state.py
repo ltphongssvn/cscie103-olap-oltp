@@ -50,6 +50,18 @@ class Worktree(BaseModel):
     is_main: bool
     is_dirty: bool
 
+    # THE BARE PARENT IS A WORKTREE RECORD WITH NO WORKING TREE.
+    #
+    # In a bare-clone layout `git worktree list` includes it, and running
+    # `git status` there fails -- which broke cleanup after a successful merge
+    # with "git status --porcelain -z failed" and no indication of the path.
+    #
+    # GIT SUPPLIES THE MARKER: porcelain lists boolean attributes as a label
+    # only, present if and only if true, so the bare entry carries `bare` and
+    # emits no HEAD or branch line at all. Nothing has to be inferred from a
+    # path or a directory name.
+    is_bare: bool = False
+
     @property
     def is_linked(self) -> bool:
         """The canonical predicate.
@@ -160,7 +172,10 @@ def _git_bytes(*args: str, cwd: Path | None = None) -> bytes:
         env=scrubbed_env(),
     )
     if result.returncode != 0:
-        raise SystemExit(f"git {' '.join(args)} failed")
+        raise SystemExit(
+            f"git {' '.join(args)} failed in {cwd}: "
+            f"{result.stderr.decode(errors='replace').strip() or '(no stderr)'}"
+        )
     return result.stdout
 
 
@@ -189,13 +204,27 @@ def _worktrees(root: Path) -> tuple[Worktree, ...]:
     worktrees: list[Worktree] = []
     for index, record in enumerate(records):
         path = Path(record["worktree"])
-        status = _git_bytes("status", "--porcelain", "-z", cwd=path)
+
+        # `bare` IS A LABEL-ONLY ATTRIBUTE, so its mere presence is the value.
+        # The parser stores it with an empty string, which is why membership is
+        # tested rather than truthiness.
+        is_bare = "bare" in record
+
+        # NEVER ASK A BARE REPOSITORY WHETHER IT IS DIRTY. It has no working
+        # tree, so the question has no answer and git exits non-zero. Reporting
+        # it as clean is the only truthful option -- reporting it as dirty would
+        # block cleanup forever.
+        is_dirty = False
+        if not is_bare:
+            is_dirty = bool(_git_bytes("status", "--porcelain", "-z", cwd=path).strip(b"\0"))
+
         worktrees.append(
             Worktree(
                 path=path,
                 branch=record.get("branch", "").removeprefix("refs/heads/") or None,
                 is_main=index == 0,
-                is_dirty=bool(status.strip(b"\0")),
+                is_dirty=is_dirty,
+                is_bare=is_bare,
             )
         )
     return tuple(worktrees)

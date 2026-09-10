@@ -20,6 +20,7 @@ TWO DESIGN CONSTRAINTS, BOTH LEARNED FROM FAIL-OPEN BUGS:
 
 from __future__ import annotations
 
+import os
 import subprocess
 import tomllib
 from pathlib import Path
@@ -186,7 +187,24 @@ def git_facts(root: Path | None = None) -> dict[str, Any]:
     elif "://" in url:
         host = url.split("://", 1)[1].split("/", 1)[0]
 
-    return {"origin_is_ssh": is_ssh, "origin_host": host}
+    # EPHEMERAL CHECKOUTS ARE OUT OF SCOPE FOR R015, AND THAT IS A SCOPE
+    # DECISION RATHER THAN AN EXEMPTION.
+    #
+    # A runner's clone is created by actions/checkout, authenticated with a
+    # scoped token, and deleted minutes later. Every reason SSH is the fleet
+    # rule -- predictable reach, one key to reason about, no stored credential
+    # -- concerns durable developer machines. CI cannot choose its transport
+    # without storing a key, which is the thing the rule exists to avoid.
+    #
+    # CI IS SET BY EVERY MAJOR RUNNER, the same signal the live gates use to
+    # decide whether missing credentials are a skip or a failure.
+    ephemeral = os.environ.get("CI", "").lower() in {"true", "1"}
+
+    return {
+        "origin_is_ssh": is_ssh,
+        "origin_host": host,
+        "is_ephemeral_checkout": ephemeral,
+    }
 
 
 def build_snapshot(root: Path) -> dict[str, Any]:

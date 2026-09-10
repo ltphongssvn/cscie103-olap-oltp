@@ -142,3 +142,17 @@ def test_git_facts_report_the_host() -> None:
     sends the reader back to the terminal to find out.
     """
     assert "origin_host" in git_facts()
+
+
+def test_git_facts_report_whether_the_checkout_is_ephemeral() -> None:
+    """R015 IS SCOPED, AND THE SCOPE IS A FACT RATHER THAN A SPECIAL CASE.
+
+    A CI runner's checkout is created by actions/checkout, authenticated with a
+    scoped token, and deleted minutes later -- it cannot choose a transport
+    without storing a key, which is the thing the rule exists to avoid. Carrying
+    that as data lets the policy express the exemption instead of the code
+    hiding it.
+    """
+    facts = git_facts()
+    assert "is_ephemeral_checkout" in facts
+    assert isinstance(facts["is_ephemeral_checkout"], bool)

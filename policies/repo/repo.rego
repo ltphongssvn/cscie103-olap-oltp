@@ -234,6 +234,11 @@ deny contains finding if {
 # empty, so absence lands on refusal rather than on undefined.
 deny contains finding if {
 	not input.git.origin_is_ssh
+
+	# SCOPED TO DURABLE CLONES. A CI runner's checkout is ephemeral,
+	# token-authenticated and deleted minutes later, so it cannot choose a
+	# transport without storing a key -- the very thing this rule avoids.
+	not input.git.is_ephemeral_checkout
 	finding := {
 		"id": "R015",
 		"reason_code": "REMOTE_NOT_SSH",

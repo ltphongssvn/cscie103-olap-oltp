@@ -20,6 +20,7 @@ bug.
 from __future__ import annotations
 
 import sys
+from pathlib import Path
 
 from pydantic import BaseModel, ConfigDict
 
@@ -47,26 +48,68 @@ def plan_cleanup(state: RepositoryState) -> CleanupPlan:
     return CleanupPlan(remove=state.deletable, blocked=state.blocked)
 
 
-def main() -> int:
-    # SWITCH BEFORE PULLING. Pulling on a feature branch merges develop into it,
-    # which is a different operation entirely and not what `sync` means.
-    switch = git("switch", INTEGRATION_BRANCH, cwd=REPO_ROOT)
-    if switch.returncode != 0:
-        print(switch.stderr.strip(), file=sys.stderr)
-        raise SystemExit(f"could not switch to {INTEGRATION_BRANCH}")
+def is_linked_worktree(root: Path) -> bool:
+    """Whether `root` is a linked worktree rather than the main one.
 
-    # --prune IS WHAT MAKES [gone] MEAN ANYTHING. Without it a remote branch
-    # deleted on merge still has a local remote-tracking ref, so upstream_gone
-    # is false for every branch and cleanup finds nothing to do.
-    pull = git("pull", "--ff-only", "--prune", cwd=REPO_ROOT)
-    if pull.returncode != 0:
-        print(pull.stdout.strip(), file=sys.stderr)
-        print(pull.stderr.strip(), file=sys.stderr)
+    GIT'S OWN COMPARISON, NOT A HEURISTIC. Inside a linked worktree $GIT_DIR
+    points at a private directory under .git/worktrees/<name> while
+    $GIT_COMMON_DIR points back at the main repository. Equal paths mean main;
+    differing paths mean linked.
+    """
+    private = git("rev-parse", "--absolute-git-dir", cwd=root).stdout.strip()
+    common = git("rev-parse", "--path-format=absolute", "--git-common-dir", cwd=root)
+    return bool(private) and private != common.stdout.strip()
+
+
+def advance_integration_branch(root: Path) -> None:
+    """Fast-forward develop WITHOUT checking it out.
+
+    THIS REPLACES AN UNCONDITIONAL `git switch develop`, WHICH CAUSED REAL
+    DAMAGE. Run from a linked worktree, that switch moved develop INTO the
+    worktree: the main worktree stopped holding it, and the feature branch being
+    cleaned up became the checked-out branch, so `branch -d` then failed after
+    the pull had already succeeded.
+
+    A REFSPEC FETCH IS THE FIX, and it is what canonical cleanup tools do for a
+    bare-parent layout: advance the ref directly, leaving whatever is checked
+    out alone. develop has no home worktree here by design -- the main worktree
+    is the stable reference and every branch lives in a linked one.
+
+    NON-FAST-FORWARD IS REFUSED by git for a refspec fetch into a local branch,
+    which is the same safety `pull --ff-only` provided and the reason divergence
+    is reported rather than merged.
+    """
+    fetched = git(
+        "fetch",
+        "origin",
+        "--prune",
+        f"{INTEGRATION_BRANCH}:{INTEGRATION_BRANCH}",
+        cwd=root,
+    )
+    if fetched.returncode != 0:
+        print(fetched.stderr.strip(), file=sys.stderr)
         raise SystemExit(
             f"{INTEGRATION_BRANCH} could not fast-forward. It has diverged from "
             "the remote, which sync will not resolve for you."
         )
-    print(pull.stdout.strip() or f"{INTEGRATION_BRANCH} already up to date")
+
+
+def main() -> int:
+    # NEVER SWITCH BRANCHES, AND THAT IS THE WHOLE CORRECTION.
+    #
+    # The previous version ran `git switch develop` unconditionally. From a
+    # linked worktree that is exactly wrong, and it happened: develop was
+    # checked out here, the main worktree lost it, and cleanup then failed
+    # trying to delete the branch it was standing on.
+    #
+    # --prune IS WHAT MAKES [gone] MEAN ANYTHING. Without it a remote branch
+    # deleted on merge still has a local remote-tracking ref, so upstream_gone
+    # is false for every branch and cleanup finds nothing to do.
+    advance_integration_branch(REPO_ROOT)
+    print(f"{INTEGRATION_BRANCH} up to date")
+
+    if is_linked_worktree(REPO_ROOT):
+        print("(linked worktree: develop was advanced, not checked out)")
 
     plan = plan_cleanup(gather(REPO_ROOT))
 

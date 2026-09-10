@@ -48,14 +48,14 @@ from __future__ import annotations
 import subprocess
 import sys
 
+from cscie103_olap_oltp.git.env import scrubbed_env
+
 # THE SSH HOST ALIAS Lightning writes into ~/.ssh/config. Using the alias rather
 # than a hostname means the identity file, keepalives and host-key policy stay
 # in one place that the CLI maintains.
 STUDIO_HOST = "serene-volhard-183"
 
 TEAMSPACE = "ltphongssvn/deploy-model-project"
-
-REMOTE_URL = "git@github.com:ltphongssvn/cscie103-olap-oltp.git"
 
 # ~/ltphongssvn RESOLVES INTO /teamspace/studios/this_studio, WHICH PERSISTS.
 # A Studio's ordinary home directory does not survive a restart, so a clone
@@ -64,6 +64,40 @@ REMOTE_URL = "git@github.com:ltphongssvn/cscie103-olap-oltp.git"
 STUDIO_REPO_PATH = "~/ltphongssvn/cscie103-olap-oltp"
 
 INTEGRATION_BRANCH = "develop"
+
+
+def remote_url() -> str:
+    """Where this repository lives, asked of git rather than declared here.
+
+    NOT A CONSTANT, AND THE REASON IS TWOFOLD.
+
+    The remote URL is a fact git already stores. A literal here would be a
+    second copy that can disagree with `git remote -v` -- the same duplication
+    this repository removes everywhere else -- and deriving repository identity
+    from git is the documented pattern for exactly this.
+
+    IT ALSO REMOVED A PII FINDING, WHICH IS HOW THE PROBLEM SURFACED. An SSH
+    remote of the form user@host is structurally an email address, and the
+    scanner cannot know it is a git remote. The rule is to eliminate at source
+    rather than allowlist, because a suppressed finding makes the scanner
+    decoration. Here the elimination and the better design are the same change.
+
+    RAISES RATHER THAN RETURNING A DEFAULT: with no origin there is nothing to
+    clone from, and a placeholder would send the Studio somewhere real.
+    """
+    result = subprocess.run(
+        ["git", "remote", "get-url", "origin"],  # noqa: S607
+        capture_output=True,
+        text=True,
+        check=False,
+        env=scrubbed_env(),
+    )
+    if result.returncode != 0:
+        raise RuntimeError(
+            "no `origin` remote is configured, so there is nothing to clone "
+            f"from:\n{result.stderr.strip() or '(no stderr)'}"
+        )
+    return result.stdout.strip()
 
 
 def ssh_command() -> list[str]:
@@ -99,7 +133,7 @@ mkdir -p ~/ltphongssvn
 if [ -d {STUDIO_REPO_PATH}/.git ]; then
   echo "ok      clone already present"
 else
-  git clone {REMOTE_URL} {STUDIO_REPO_PATH}
+  git clone {remote_url()} {STUDIO_REPO_PATH}
   echo "created clone"
 fi
 

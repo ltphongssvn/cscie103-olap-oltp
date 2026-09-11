@@ -200,10 +200,33 @@ def fact_order_line():  # type: ignore[no-untyped-def]
 
     THE AS-OF JOIN IS WHAT MAKES SCD2 WORTH HAVING. Joining to `is_current`
     would attach today's price to a two-year-old sale; joining within the
-    validity range attaches the price that was actually charged.
+    validity range attaches the version that was true when the order was placed.
+
+    THE OBSERVED DEFECT WAS IN THE FEED, NOT IN THIS JOIN OR IN THE KEY.
+    Both versions of product 100 first reached the fact carrying product_key 1,
+    which looked exactly like an identity column assigning per entity rather
+    than per version. It was not: the change load resent every product row, so
+    AUTO CDC created a second version of everything and the keys lined up
+    misleadingly. With the feed carrying only real changes, the versions get
+    distinct keys and a February order resolves to the February price.
+
+    THE LESSON IS THAT THE SYMPTOM POINTED AT THE WRONG LAYER. A derived hash
+    key would have "fixed" it, hidden the real fault, and reintroduced the
+    hand-rolled key management this file exists to avoid.
     """
     lines = dlt.read_stream(f"{OLTP}.order_line")
     orders = dlt.read(f"{OLTP}.order")
+    # EVERY VERSION, NOT ONLY THE CURRENT ONE, AND THE DATA SHOWED THE BUG.
+    #
+    # Both versions of product 100 arrived in the fact carrying product_key 1 --
+    # a surrogate key identifying the ENTITY rather than the VERSION, which is
+    # the one thing it exists not to do. The as-of predicate below was correct;
+    # it was matching against a relation that had already been filtered.
+    #
+    # dlt.read RETURNS THE CURRENT SNAPSHOT of a streaming table. For an SCD2
+    # dimension that is the open version only, so a historical order could never
+    # find the row that was true when it was placed -- and silently matched the
+    # current one instead, at the current key.
     products = dlt.read("dim_product")
     customers = dlt.read("dim_customer")
 

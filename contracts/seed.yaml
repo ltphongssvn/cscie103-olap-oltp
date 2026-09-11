@@ -1,0 +1,100 @@
+# contracts/seed.yaml
+#
+# THE SEED, AS DATA RATHER THAN AS PYTHON LITERALS.
+#
+# It lived inside seed.py, where mutation testing rewrote names and shifted
+# dates and no test could tell -- there is nothing to assert about an
+# arbitrary fixture value except by restating it. Moving it here makes the
+# distinction structural: this is data; seed.py is loading logic that can be
+# tested, and is.
+#
+# VALIDATED AGAINST THE PANDERA CONTRACTS ON LOAD, so a malformed edit here
+# fails exactly the way bad production data would.
+#
+# TWO LOADS, BECAUSE SCD2 NEEDS A BEFORE AND AN AFTER. `change` carries only
+# what changed: a feed that resends unchanged rows versions everything.
+change:
+  product:
+    category_id:
+    - 10
+    list_price:
+    - 11.99
+    product_id:
+    - 100
+    product_name:
+    - Hammer
+initial:
+  category:
+    category_id:
+    - 10
+    - 20
+    - 30
+    category_name:
+    - Tools
+    - Books
+    - Unstocked
+  customer:
+    customer_id:
+    - 1
+    - 2
+    email_domain:
+    - example.test
+    - example.test
+    full_name:
+    - Ada Lovelace
+    - Alan Turing
+    registered_at:
+    - '2026-01-01'
+    - '2026-01-02'
+  order:
+    customer_id:
+    - 1
+    - 2
+    order_id:
+    - 1000
+    - 1001
+    ordered_at:
+    - '2026-02-01'
+    - '2026-04-01'
+    status:
+    - delivered
+    - shipped
+  order_line:
+    line_number:
+    - 1
+    - 2
+    - 1
+    - 2
+    order_id:
+    - 1000
+    - 1000
+    - 1001
+    - 1001
+    product_id:
+    - 100
+    - 200
+    - 100
+    - 999
+    quantity:
+    - 2
+    - 1
+    - 3
+    - 1
+    unit_price:
+    - 9.99
+    - 55.0
+    - 11.99
+    - 1.0
+  product:
+    category_id:
+    - 10
+    - 20
+    list_price:
+    - 9.99
+    - 55.0
+    product_id:
+    - 100
+    - 200
+    product_name:
+    - Hammer
+    - SICP

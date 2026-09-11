@@ -113,6 +113,37 @@ def warehouse_id() -> str:
     return identifier
 
 
+def execute(statement: str) -> None:
+    """Run one SQL statement through the Statement Execution API.
+
+    EXTRACTED SO TABLE CREATION CAN REUSE IT rather than repeating the warehouse
+    lookup, the request shape and the state check. Those three details were
+    already correct here; copying them into a second module would give the copy
+    its own chance to be wrong.
+
+    THE WAREHOUSE IS STARTED BY THIS CALL if it is stopped, which is normal on a
+    tier whose single warehouse auto-stops. wait_timeout gives it room to come
+    up rather than reporting a cold start as a failure.
+    """
+    response = _cli(
+        "api",
+        "post",
+        "/api/2.0/sql/statements",
+        "--json",
+        json.dumps(
+            {
+                "warehouse_id": warehouse_id(),
+                "statement": statement,
+                "wait_timeout": "50s",
+            }
+        ),
+    )
+
+    state = response.get("status", {}).get("state")
+    if state != "SUCCEEDED":
+        raise RuntimeError(f"statement did not succeed: {response.get('status')}")
+
+
 def existing_catalogs() -> set[str]:
     listing = _cli("catalogs", "list", "--output", "json")
     return {item["name"] for item in listing}

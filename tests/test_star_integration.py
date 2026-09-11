@@ -31,7 +31,22 @@ import pytest
 
 from cscie103_olap_oltp.olap.warehouse import UNKNOWN_KEY, query
 
-pytestmark = pytest.mark.integration
+# BOTH MARKERS, AND THE SECOND IS A TIER LIMITATION RATHER THAN A PREFERENCE.
+#
+# CI RUNS AS A SERVICE PRINCIPAL WITHOUT databricks-sql-access, so the Statement
+# Execution API refuses it outright:
+#
+#     This API is disabled for users without the databricks-sql-access
+#     entitlement.
+#
+# Free Edition cannot grant entitlements to a service principal, so this is not
+# a permission to fix -- it is the tier. `spark` is the registered marker for
+# "needs a session CI does not have", and the integration gate excludes it.
+#
+# THE ASSERTIONS ARE NOT WEAKENED TO SUIT THE RUNNER. Deleting them, or reducing
+# them to something CI can check, would trade a real proof for a green tick. They
+# run wherever a user identity exists, which today is a developer machine.
+pytestmark = [pytest.mark.integration, pytest.mark.spark]
 
 
 def test_a_changed_entity_has_two_versions_and_an_unchanged_one_has_one() -> None:

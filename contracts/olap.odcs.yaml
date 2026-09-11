@@ -1,0 +1,124 @@
+apiVersion: v3.1.0
+kind: DataContract
+id: cscie103-olap-oltp-olap
+version: 1.0.0
+status: active
+name: cscie103_olap_oltp_olap
+description:
+  purpose: The OLAP model. Generated from src/cscie103_olap_oltp/olap/contracts.py -- edit those models,
+    then run `mise run contracts:generate`.
+schema:
+- name: dim_customer
+  logicalType: object
+  description: Who bought, versioned. SCD Type 2, same shape as DimProduct.
+  properties:
+  - name: customer_key
+    logicalType: integer
+    required: true
+    unique: true
+  - name: customer_id
+    logicalType: integer
+    required: true
+  - name: full_name
+    logicalType: string
+    required: true
+  - name: email_domain
+    logicalType: string
+    required: true
+  - name: valid_from
+    logicalType: date
+    required: true
+  - name: valid_to
+    logicalType: date
+    required: false
+  - name: is_current
+    logicalType: boolean
+    required: true
+- name: dim_date
+  logicalType: object
+  description: "A conformed calendar. NOT VERSIONED -- a date does not change.\n\n    PRE-CALCULATED ATTRIBUTES,\
+    \ so no query ever derives a quarter from a\n    timestamp at runtime, and every report agrees on\
+    \ what a quarter is."
+  properties:
+  - name: date_key
+    logicalType: integer
+    required: true
+    unique: true
+  - name: calendar_date
+    logicalType: date
+    required: true
+  - name: year
+    logicalType: integer
+    required: true
+  - name: quarter
+    logicalType: integer
+    required: true
+  - name: month
+    logicalType: integer
+    required: true
+  - name: day_of_month
+    logicalType: integer
+    required: true
+  - name: is_weekend
+    logicalType: boolean
+    required: true
+- name: dim_product
+  logicalType: object
+  description: 'What was sold, versioned. SCD TYPE 2: one row per product per version.'
+  properties:
+  - name: product_key
+    logicalType: integer
+    required: true
+    unique: true
+  - name: product_id
+    logicalType: integer
+    required: true
+  - name: product_name
+    logicalType: string
+    required: true
+  - name: category_name
+    logicalType: string
+    required: true
+  - name: list_price
+    logicalType: number
+    required: true
+  - name: valid_from
+    logicalType: date
+    required: true
+  - name: valid_to
+    logicalType: date
+    required: false
+  - name: is_current
+    logicalType: boolean
+    required: true
+- name: fact_order_line
+  logicalType: object
+  description: "One row per order line. THE GRAIN, STATED AND ENFORCED.\n\n    KEYS AND MEASURES ONLY.\
+    \ Descriptive attributes belong in dimensions;\n    carrying a product name here would mean rewriting\
+    \ facts whenever a name\n    changed, which is the write amplification the star accepts once and should\n\
+    \    not accept twice."
+  properties:
+  - name: order_id
+    logicalType: integer
+    required: true
+  - name: line_number
+    logicalType: integer
+    required: true
+  - name: customer_key
+    logicalType: integer
+    required: true
+  - name: product_key
+    logicalType: integer
+    required: true
+  - name: date_key
+    logicalType: integer
+    required: true
+  - name: quantity
+    logicalType: integer
+    required: true
+  - name: unit_price
+    logicalType: number
+    required: true
+  - name: line_revenue
+    logicalType: number
+    required: true

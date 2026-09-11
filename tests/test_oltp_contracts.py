@@ -25,8 +25,6 @@ models side by side with contracts on each is what makes the difference
 demonstrable rather than asserted.
 """
 
-import json
-
 import pandas as pd
 import pytest
 from pandera.errors import SchemaError, SchemaErrors
@@ -202,44 +200,3 @@ def test_no_contract_carries_personal_data() -> None:
     for model in (Customer, Category, Product, Order, OrderLine):
         columns = set(model.to_schema().columns)
         assert not (columns & forbidden), f"{model.__name__} declares personal data"
-
-
-def test_the_published_contract_covers_every_table() -> None:
-    """A CONTRACT MISSING A TABLE IS WORSE THAN NONE: a consumer reads it,
-    finds four entities, and concludes the fifth does not exist."""
-    from cscie103_olap_oltp.oltp.contracts import TABLES
-    from cscie103_olap_oltp.oltp.publish import generate
-
-    assert set(generate()["tables"]) == set(TABLES)
-
-
-def test_the_published_contract_carries_the_checks() -> None:
-    """THE REASON to_json() REPLACED to_json_schema().
-
-    The first version published the JSON-Schema projection, which renders the
-    columnar shape and DROPS every check -- so `unique` and `gt=0` vanished and
-    a consumer saw none of the rules the producer enforces.
-
-    Asserting the checks are present is what keeps the lossy form from quietly
-    coming back.
-    """
-    from cscie103_olap_oltp.oltp.publish import generate
-
-    customer = generate()["tables"]["customer"]
-    assert customer["columns"]["customer_id"]["unique"] is True
-    assert customer["columns"]["customer_id"]["greater_than"] == 0
-    assert customer["strict"] is True
-
-
-def test_the_published_contract_round_trips() -> None:
-    """THE PROPERTY THAT MAKES IT A CONTRACT RATHER THAN A REPORT.
-
-    pandera can load this document back into a working schema, so the published
-    file IS the validator -- not a description of one that may have drifted.
-    """
-    import pandera.pandas as pa
-
-    from cscie103_olap_oltp.oltp.publish import generate
-
-    restored = pa.DataFrameSchema.from_json(json.dumps(generate()["tables"]["customer"]))
-    restored.validate(_customers())

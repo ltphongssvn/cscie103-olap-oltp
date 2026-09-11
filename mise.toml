@@ -201,6 +201,22 @@ description = "Authenticate this machine to Databricks (interactive, one-time)"
 # ci.yml. `mise` exports .env for tasks, so DATABRICKS_HOST is already set.
 run = 'databricks auth login --host "$DATABRICKS_HOST" --profile DEFAULT'
 
+[tasks."check:architecture"]
+description = "Verify the declared module boundaries still hold"
+# THE CONTRACTS LIVE IN pyproject.toml, beside the code they constrain, and are
+# checked by import-linter rather than by anything written here.
+run = "uv run lint-imports"
+
+[tasks."check:env-template"]
+description = "Refuse a committed .env.example that disagrees with the model"
+# NAMED BY R017. The policy asserts this task exists, so renaming it without
+# updating the rule is a denial rather than a silent loss of the drift check.
+run = "uv run python -m cscie103_olap_oltp.environment --check-template"
+
+[tasks."check:artifact-schema"]
+description = "Refuse a committed artifact schema that disagrees with the models"
+run = "uv run python -m cscie103_olap_oltp.contracts.schema --check"
+
 [tasks."schema:generate"]
 description = "Regenerate the published artifact schema from the models"
 # DELIBERATE, NOT AUTOMATIC. The committed schema is the contract consumers

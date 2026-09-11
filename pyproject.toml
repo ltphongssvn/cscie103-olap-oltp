@@ -54,6 +54,13 @@ dev = [
   # switch off type checking for every jsonschema call, and those calls are what
   # enforce the published artifact contract.
   "types-jsonschema>=4.23",
+  # ARCHITECTURE ENFORCED BY A LIBRARY BUILT FOR IT, NOT BY CUSTOM ANALYSIS.
+  #
+  # The boundary rules below were nearly implemented as bespoke AST walking plus
+  # Rego facts -- custom code doing a job an established tool already does,
+  # which is the debt this repository refuses everywhere else. import-linter
+  # compares real imports against declared contracts and fails the build.
+  "import-linter>=2.11",
   # PII DETECTION BY CONTENT, NOT BY PATH.
   #
   # The structural controls -- .gitignore rules and the hygiene gate's extension
@@ -102,7 +109,7 @@ src = ["src", "tests"]
 [tool.ruff.lint]
 # Deliberately broader than defaults. S is bandit: executed CODE gets checked,
 # not only the data it processes.
-select = ["E", "F", "I", "N", "UP", "B", "S", "SIM", "RUF"]
+select = ["E", "F", "I", "N", "UP", "B", "S", "SIM", "RUF", "TID"]
 
 [tool.ruff.lint.per-file-ignores]
 # S101 forbids `assert` because Python strips asserts under -O, so an assert used
@@ -111,6 +118,21 @@ select = ["E", "F", "I", "N", "UP", "B", "S", "SIM", "RUF"]
 # subprocess warnings, and proving a gate refuses something cannot be faked
 # in-process; it has to shell out.
 "tests/*.py" = ["S101", "S603", "S607"]
+# THE TWO MODULES THAT ARE ALLOWED TO TOUCH THE RAW ENVIRONMENT, because each
+# IS a boundary:
+#   environment.py  hands the environment to pydantic, which parses, casts and
+#                   validates it. Nothing else should re-implement that.
+#   git/env.py      must see git's routing variables in order to REMOVE them;
+#                   asking a settings model would defeat the purpose.
+"src/cscie103_olap_oltp/environment.py" = ["TID251"]
+"src/cscie103_olap_oltp/git/env.py" = ["TID251"]
+# conftest reads the raw environment to strip it, for the same reason git/env
+# does -- see the incident recorded in its docstring.
+"tests/conftest.py" = ["S101", "S603", "S607", "TID251"]
+# test_gitenv's SUBJECT is the raw environment: it proves the scrub removes
+# routing variables, which cannot be asserted through a settings model that
+# deliberately does not carry them.
+"tests/test_gitenv.py" = ["S101", "S603", "S607", "TID251"]
 # DATABRICKS NOTEBOOKS ARE A DIFFERENT DIALECT, SCOPED BY PATH.
 #   F821  spark, dbutils and display are INJECTED BY THE RUNTIME. No import
 #         exists or can exist.
@@ -119,6 +141,23 @@ select = ["E", "F", "I", "N", "UP", "B", "S", "SIM", "RUF"]
 #   N812  `from pyspark.sql import functions as F` is the universal convention.
 #   S101  asserts are the checking mechanism, and a job never runs under -O.
 "notebooks/*.py" = ["F821", "E402", "N812", "S101"]
+
+# --- Configuration is read at one boundary, by a library built for it ---------
+#
+# PYDANTIC PARSES, CASTS AND VALIDATES THE ENVIRONMENT. Reading os.environ at a
+# call site re-implements that per caller, and this repository already paid for
+# it: `os.environ.get("CI", "").lower() in {"true", "1"}` existed in four
+# modules, each spelled slightly differently, and none of them would have
+# accepted "True" without the lowercase call nobody remembered to add.
+#
+# ENFORCED BY RUFF RATHER THAN BY REVIEW. TID251 checks that specific module
+# MEMBERS are not imported or accessed, which is precisely the granularity this
+# rule needs -- import-linter forbids whole modules and cannot express it, and
+# writing an AST walker to do it would be the custom code this rule exists to
+# forbid.
+[tool.ruff.lint.flake8-tidy-imports.banned-api]
+"os.environ".msg = "Read configuration through cscie103_olap_oltp.environment, which lets pydantic parse, cast and validate it."
+"os.getenv".msg = "Read configuration through cscie103_olap_oltp.environment, which lets pydantic parse, cast and validate it."
 
 [tool.mypy]
 python_version = "3.12"
@@ -189,3 +228,52 @@ addopts = ["--strict-markers", "--strict-config", "-ra", "-m", "not integration"
 # An xfail that PASSES is a failure. Otherwise a fixed bug leaves its xfail in
 # place forever and the suite reports success for a test asserting nothing.
 xfail_strict = true
+
+
+# --- Architecture as Code ------------------------------------------------------
+#
+# TWO TOOLS, BECAUSE THE RULES LIVE AT TWO LEVELS. Forcing one to do both would
+# mean hand-rolling the half it cannot express.
+#
+#   ruff TID251     an ATTRIBUTE path:  os.environ
+#   import-linter   a MODULE dependency: environment must not import cloud
+#
+# THE FIRST ATTEMPT CONFLATED THEM AND THE TOOL SAID SO. It asked import-linter
+# to forbid `os` outright, which broke instantly: ledger imports os for fsync,
+# and four modules reached os INDIRECTLY through git.env -- the very boundary
+# that is supposed to own it. Forbidding a module cannot mean "not this one
+# attribute", and pretending otherwise would have needed an allowlist per caller.
+[tool.importlinter]
+root_package = "cscie103_olap_oltp"
+include_external_packages = true
+
+[[tool.importlinter.contracts]]
+id = "config-boundary"
+name = "The settings boundary depends on nothing above it"
+type = "forbidden"
+# environment.py IS THE BOTTOM OF THE STACK. If it imported a module that reads
+# configuration, construction would recurse -- and the failure would surface as
+# an import error far from its cause.
+source_modules = ["cscie103_olap_oltp.environment"]
+forbidden_modules = [
+  "cscie103_olap_oltp.cloud",
+  "cscie103_olap_oltp.databricks",
+  "cscie103_olap_oltp.catalog",
+  "cscie103_olap_oltp.identity",
+  "cscie103_olap_oltp.gates",
+]
+
+[[tool.importlinter.contracts]]
+id = "contracts-are-pure"
+name = "Published contracts do not depend on the platform that emits them"
+type = "forbidden"
+# A CONSUMER IMPORTS THESE MODELS WITHOUT THIS PLATFORM. If the contract package
+# reached into gates or cloud, the published schema would carry a dependency on
+# machinery no reader has.
+source_modules = ["cscie103_olap_oltp.contracts.verdict"]
+forbidden_modules = [
+  "cscie103_olap_oltp.cloud",
+  "cscie103_olap_oltp.databricks",
+  "cscie103_olap_oltp.gates",
+  "cscie103_olap_oltp.ledger",
+]

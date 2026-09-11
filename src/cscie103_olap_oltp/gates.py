@@ -126,6 +126,16 @@ GATES: tuple[Gate, ...] = (
             "--check",
         ),
     ),
+    # ARCHITECTURE, CHECKED BY A TOOL BUILT FOR IT.
+    #
+    # The module-level boundaries were previously held by docstrings and habit,
+    # and habit is what failed -- one hardcoded endpoint and four copies of an
+    # environment check reached main before anyone noticed. import-linter reads
+    # the real import graph; nothing here re-implements that analysis.
+    Gate(
+        name="architecture",
+        command=("uv", "run", "lint-imports"),
+    ),
     # THE ENV CONTRACT IS DERIVED, SO IT MUST BE VERIFIED. A generated file
     # that nobody regenerates is a hand-maintained file with a misleading
     # header -- and template drift is the documented number-one "works on my

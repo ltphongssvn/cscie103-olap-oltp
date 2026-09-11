@@ -144,6 +144,22 @@ class Environment(BaseSettings):
         examples=[""],
     )
 
+    # THE AGENT SOCKET, DECLARED BECAUSE A DIAGNOSTIC READ IT RAW.
+    #
+    # cloud.py reported this in an unreachable-agent error via os.environ --
+    # found by TID251 on its first run. It is ambient process state like any
+    # other, so it belongs in the one model that parses and validates such
+    # state, not in an ad-hoc lookup at the point of failure.
+    #
+    # NOT SECRET: it is a socket path, and hiding it would make the diagnostic
+    # useless for the one problem it exists to explain.
+    ssh_auth_sock: str | None = Field(
+        default=None,
+        alias="SSH_AUTH_SOCK",
+        description="Path to the ssh-agent socket. Absent means no agent is reachable.",
+        examples=["/private/tmp/com.apple.launchd.ABC/Listeners"],
+    )
+
     gh_token: SecretStr | None = Field(
         default=None,
         alias="GH_TOKEN",

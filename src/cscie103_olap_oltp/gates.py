@@ -222,9 +222,18 @@ GATES: tuple[Gate, ...] = (
     # from the default pytest run by design, so a test written and left there is
     # a test that exists and never executes -- worse than no test, because it
     # looks like coverage.
+    #
+    # `and not spark` IS A TIER LIMITATION, NOT A CONVENIENCE. CI runs as a
+    # service principal, and Free Edition cannot grant it databricks-sql-access
+    # -- so the Statement Execution API refuses it outright. Tests that read the
+    # warehouse are marked `spark` and run where a user identity exists.
+    #
+    # THE ALTERNATIVE WAS TO WEAKEN THEM UNTIL CI COULD PASS THEM, which trades
+    # a real proof for a green tick. Recording the boundary is honest; moving it
+    # is not.
     Gate(
         name="test (integration)",
-        command=("uv", "run", "pytest", "-m", "integration"),
+        command=("uv", "run", "pytest", "-m", "integration and not spark"),
         needs_network=True,
     ),
     # THE FLAKE'S THREE-PLATFORM PROMISE WAS NEVER VERIFIED BY THE GATE.

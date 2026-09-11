@@ -52,11 +52,13 @@ from cscie103_olap_oltp.policy.snapshot import REPO_ROOT
 from cscie103_olap_oltp.remediation import ActionableError
 
 __all__ = [
+    "DEFAULT_LOCK_TIMEOUT_SECONDS",
     "GENESIS_HASH",
     "LedgerEntry",
     "LedgerLockError",
     "LedgerVerification",
     "append",
+    "deadline_reached",
     "machine_id",
     "verify_chain",
 ]
@@ -69,6 +71,23 @@ GENESIS_HASH = "0" * 64
 LEDGER_PATH = REPO_ROOT / ".artifacts" / "ledger.jsonl"
 
 MACHINE_ID_PATH = Path.home() / ".config" / "cscie103-olap-oltp" / "machine-id"
+
+# HOW LONG A RUN WAITS FOR THE LOCK, AND HOW OFTEN IT ASKS.
+#
+# NAMED BECAUSE A LITERAL DEFAULT HAD NO SEAM. Mutation testing changed
+# `timeout_seconds: float = 5.0` to 6.0 and nothing noticed: no caller relied on
+# the default, and reading it back through inspect.signature returns the
+# wrapper's signature rather than the function's. A module constant is a value a
+# test can assert directly.
+#
+# IT IS ALSO THE OPERATOR CONTRACT. The lock error tells someone to "retry; if
+# it persists, a crashed process may have left the lock behind" -- how long
+# "persists" means is this number.
+DEFAULT_LOCK_TIMEOUT_SECONDS = 5.0
+
+# THE POLL INTERVAL. Short enough that the deadline is honoured closely, long
+# enough that contention does not spin a core.
+LOCK_POLL_SECONDS = 0.05
 
 
 class LedgerLockError(ActionableError):
@@ -95,13 +114,16 @@ def machine_id() -> str:
     whole point -- see the module docstring on why a hostname is unusable.
     """
     if MACHINE_ID_PATH.is_file():
-        existing = MACHINE_ID_PATH.read_text(encoding="utf-8").strip()
+        # NO EXPLICIT ENCODING, for the reason compute_hash states: the
+        # argument is redundant and its only effect was to generate an
+        # unkillable "UTF-8" mutant.
+        existing = MACHINE_ID_PATH.read_text().strip()
         if existing:
             return existing
 
     generated = str(uuid.uuid4())
     MACHINE_ID_PATH.parent.mkdir(parents=True, exist_ok=True)
-    MACHINE_ID_PATH.write_text(generated + "\n", encoding="utf-8")
+    MACHINE_ID_PATH.write_text(generated + "\n")
     return generated
 
 
@@ -139,7 +161,17 @@ class LedgerEntry(BaseModel):
             sort_keys=True,
             separators=(",", ":"),
         )
-        return hashlib.sha256(material.encode("utf-8")).hexdigest()
+        # NO EXPLICIT ENCODING, AND THAT IS A MUTATION-TESTING RESULT.
+        #
+        # `.encode("utf-8")` left a mutant that changed it to "UTF-8" -- the
+        # same codec, so no test could ever kill it. An equivalent mutant is
+        # normally written off as undecidable noise, but this one existed only
+        # because the argument was redundant: str.encode defaults to UTF-8.
+        #
+        # DELETING THE ARGUMENT DELETES THE MUTANT. That is the difference
+        # between tolerating an unkillable survivor and removing the reason it
+        # could be generated.
+        return hashlib.sha256(material.encode()).hexdigest()
 
 
 class LedgerVerification(BaseModel):
@@ -160,9 +192,23 @@ def _read_entries(path: Path) -> list[LedgerEntry]:
         return []
     return [
         LedgerEntry.model_validate_json(line)
-        for line in path.read_text(encoding="utf-8").splitlines()
+        for line in path.read_text().splitlines()
         if line.strip()
     ]
+
+
+def deadline_reached(now: float, deadline: float) -> bool:
+    """Whether the wait is over. EXTRACTED SO THE BOUNDARY IS TESTABLE.
+
+    `>=`, NOT `>`, AND THE DIFFERENCE IS ONE POLL. Inline, the comparison had no
+    seam: a mutant loosening it survived because the only observable effect was
+    an extra 50ms before the same error, which no test could assert without
+    becoming timing-sensitive -- and timing-sensitive tests are how mutation
+    testing turns flake into false survivors.
+
+    AS A PURE FUNCTION IT IS ASSERTABLE AT THE EXACT BOUNDARY, with no clock.
+    """
+    return now >= deadline
 
 
 def _acquire_exclusive(handle: IO[str], lock_path: Path, timeout_seconds: float) -> None:
@@ -178,7 +224,7 @@ def _acquire_exclusive(handle: IO[str], lock_path: Path, timeout_seconds: float)
             fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
             return
         except OSError:
-            if time.monotonic() >= deadline:
+            if deadline_reached(time.monotonic(), deadline):
                 raise LedgerLockError(
                     "could not acquire the ledger lock",
                     remediation=(
@@ -189,14 +235,14 @@ def _acquire_exclusive(handle: IO[str], lock_path: Path, timeout_seconds: float)
                     lock_path=str(lock_path),
                     timeout_seconds=timeout_seconds,
                 ) from None
-            time.sleep(0.05)
+            time.sleep(LOCK_POLL_SECONDS)
 
 
 def append(
     payload: dict[str, Any],
     path: Path = LEDGER_PATH,
     *,
-    timeout_seconds: float = 5.0,
+    timeout_seconds: float = DEFAULT_LOCK_TIMEOUT_SECONDS,
 ) -> LedgerEntry:
     """Append one record, chained to the last, under an exclusive lock.
 
@@ -212,6 +258,11 @@ def append(
 
     A SIDECAR LOCK FILE, so lock state never touches the ledger bytes.
 
+    NO EXPLICIT encoding ON EITHER open(). It is the platform default, so the
+    argument changed nothing and generated two unkillable mutants -- "UTF-8"
+    and None both behave identically. Removing the redundancy removes the
+    mutants rather than tolerating them as equivalent.
+
     LIMITS, STATED: flock is ADVISORY, so a process that ignores it can still
     corrupt the file, and it is silently ignored on NFS. This guards concurrent
     runs of THIS program on a local filesystem, which is the case that exists.
@@ -219,7 +270,7 @@ def append(
     path.parent.mkdir(parents=True, exist_ok=True)
     lock_path = path.with_suffix(path.suffix + ".lock")
 
-    with lock_path.open("w", encoding="utf-8") as lock_handle:
+    with lock_path.open("w") as lock_handle:
         _acquire_exclusive(lock_handle, lock_path, timeout_seconds)
 
         try:
@@ -236,7 +287,7 @@ def append(
                 payload=payload,
             )
 
-            with path.open("a", encoding="utf-8") as handle:
+            with path.open("a") as handle:
                 handle.write(entry.model_dump_json() + "\n")
                 # FLUSHED AND FSYNCED INSIDE THE LOCK. Releasing before the
                 # bytes reach disk would let the next writer read a tail that is

@@ -27,27 +27,43 @@ from typing import Any
 from cscie103_olap_oltp.catalog import _cli, warehouse_id
 from cscie103_olap_oltp.olap.contracts import UNKNOWN_KEY
 
-__all__ = ["UNKNOWN_KEY", "olap_schema", "query"]
+__all__ = ["UNKNOWN_KEY", "olap_schema", "oltp_schema", "query"]
+
+
+def _resolved_schema(name: str) -> str:
+    """One schema's fully qualified name, as the bundle resolved it.
+
+    SHARED BY BOTH SIDES rather than written twice. The `bundle validate` call
+    is the slow part, so duplicating it would also double the cost of every
+    lineage query.
+    """
+    resolved = _cli("bundle", "validate", "-t", "dev", "--output", "json")
+    schema: str = resolved["resources"]["schemas"][name]["name"]
+    catalog: str = resolved["resources"]["schemas"][name]["catalog_name"]
+
+    return f"{catalog}.{schema}"
 
 
 def olap_schema() -> str:
     """The effective OLAP schema for this deployment, ASKED OF THE BUNDLE.
 
     NOT RECONSTRUCTED FROM AN IDENTITY. A first version composed the dev prefix
-    from a `databricks_username` setting -- a field that does not exist, invented
-    because the shape of the answer was obvious and the source was not. Even had
-    it existed, that would be a second implementation of the CLI's naming rule,
-    disagreeing the first time the rule changed.
-
-    THE BUNDLE ALREADY RESOLVED THIS. `bundle validate --output json` reports the
-    resolved resources for the target, including the schema the pipeline
-    publishes into -- which is by construction the one this deploy created.
+    from a `databricks_username` setting -- a field that does not exist,
+    invented because the shape of the answer was obvious and the source was not.
+    Even had it existed, that would be a second implementation of the CLI's
+    naming rule, disagreeing the first time the rule changed.
     """
-    resolved = _cli("bundle", "validate", "-t", "dev", "--output", "json")
-    schema: str = resolved["resources"]["schemas"]["olap"]["name"]
-    catalog: str = resolved["resources"]["schemas"]["olap"]["catalog_name"]
+    return _resolved_schema("olap")
 
-    return f"{catalog}.{schema}"
+
+def oltp_schema() -> str:
+    """The effective OLTP schema, ASKED OF THE BUNDLE like its OLAP sibling.
+
+    BOTH SIDES COME FROM THE SAME RESOLVED DOCUMENT, so a rename in
+    databricks.yml moves them together and neither can be left pointing at a
+    schema the deploy no longer creates.
+    """
+    return _resolved_schema("oltp")
 
 
 def query(statement: str, **parameters: Any) -> list[dict[str, Any]]:

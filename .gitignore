@@ -46,3 +46,9 @@ result-*
 # .env.example IS COMMITTED and carries no real values. It is generated from
 # environment.py, so the two cannot drift.
 .env
+
+# mutmut's mutated copy of the source tree, plus its results database. Generated
+# on every run and rewritten wholesale; committing it would add tens of
+# thousands of lines nobody wrote.
+mutants/
+.mutmut-cache

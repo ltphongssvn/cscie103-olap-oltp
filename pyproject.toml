@@ -175,6 +175,18 @@ select = ["E", "F", "I", "N", "UP", "B", "S", "SIM", "RUF", "TID"]
 #   N812  `from pyspark.sql import functions as F` is the universal convention.
 #   S101  asserts are the checking mechanism, and a job never runs under -O.
 "notebooks/*.py" = ["F821", "E402", "N812", "S101"]
+# PIPELINE SOURCE IS THE SAME DIALECT, AND LIVES OUTSIDE src/ FOR A REASON.
+#
+# It first sat under src/cscie103_olap_oltp/pipelines/. The error-code registry
+# discovers codes by walking every module in the package -- deliberately, so a
+# new error module cannot be forgotten -- and that walk imported it and died on
+# `import dlt`, which exists only inside a pipeline runtime. An import-linter
+# contract would have stopped a deliberate import; it cannot stop a traversal
+# that imports everything by design. The boundary is therefore physical.
+#
+#   F821  `spark` and `dlt` are INJECTED by the pipeline runtime.
+#   B008  decorated functions are called by the framework, not by us.
+"pipelines/*.py" = ["F821", "E402", "N812", "S101", "B008"]
 
 # --- Configuration is read at one boundary, by a library built for it ---------
 #
@@ -199,7 +211,10 @@ strict = true
 # Notebooks are excluded for the same reason F821 is disabled for them: spark,
 # dbutils and display have no importable types, so every cell would report
 # errors describing the checker's model rather than the code.
-exclude = ["notebooks/.*"]
+# pipelines/ is excluded for the same reason: `dlt` and `spark` have no
+# importable types, so every line would report the checker's model rather than
+# the code.
+exclude = ["notebooks/.*", "pipelines/.*"]
 
 # --- Fail closed --------------------------------------------------------------
 # strict = true is not the ceiling. These turn silence into failure.

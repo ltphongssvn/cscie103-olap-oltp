@@ -1,0 +1,56 @@
+# resources/star_pipeline.yml
+# THE OLTP-TO-STAR PIPELINE, DECLARED AS A BUNDLE RESOURCE.
+#
+# Version-controlling pipeline source alongside the bundle is the documented
+# practice: the DAG is reviewed, validated in dev and promoted, rather than
+# assembled by clicking in a workspace where no diff exists.
+resources:
+  pipelines:
+    star:
+      name: ${bundle.name}-star
+
+      # schema, NOT target. `target` is the legacy publishing mode; `schema` is
+      # what the current default publishing mode expects, and mixing them is a
+      # documented source of pipelines that deploy but publish nowhere.
+      catalog: ${var.catalog}
+
+      # A RESOURCE REFERENCE, NOT A COMPOSED NAME, AND THE CLI CHOSE IT FOR US.
+      #
+      # This first read ${var.schema_prefix}${var.olap_schema}. The resolved
+      # bundle showed ${resources.schemas.olap.name} instead -- the CLI resolved
+      # the composition back to the resource that owns the name.
+      #
+      # KEEPING THE REFERENCE IS THE BETTER FORM: it declares a DEPENDENCY, so
+      # the deploy creates the schema before the pipeline that publishes into
+      # it. A composed string names the same schema and declares nothing, which
+      # lets a first deploy race its own prerequisite.
+      schema: ${resources.schemas.olap.name}
+
+      # SERVERLESS BECAUSE THIS TIER OFFERS NOTHING ELSE. Free Edition has no
+      # configurable clusters, so a `clusters:` block here would fail to deploy
+      # rather than tune anything.
+      serverless: true
+
+      # TRIGGERED, NOT CONTINUOUS. A continuous pipeline on a teaching platform
+      # bills for idling and hides failures behind retries; a triggered run
+      # makes each execution a discrete event with its own outcome.
+      continuous: false
+
+      libraries:
+        # `file:`, NOT `glob:`. Glob includes are still Beta in the bundle
+        # schema, and a Beta include that the installed CLI does not understand
+        # deploys an empty graph rather than failing.
+        - file:
+            path: ../pipelines/star.py
+
+      configuration:
+        # THE SOURCE SCHEMA IS PASSED IN, NEVER HARDCODED IN THE SOURCE.
+        #
+        # Development mode renames schemas -- oltp becomes dev_<user>_oltp -- so
+        # a pipeline reading a literal "oltp" works in prod and silently finds
+        # nothing in dev. The effective name is composed here, where the prefix
+        # is known.
+        oltp_catalog: ${var.catalog}
+        # THE SAME REASONING, and the same dependency: the pipeline must not run
+        # before the schema it reads exists.
+        oltp_schema: ${resources.schemas.oltp.name}

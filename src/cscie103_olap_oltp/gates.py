@@ -231,6 +231,9 @@ GATES: tuple[Gate, ...] = (
     # THE ALTERNATIVE WAS TO WEAKEN THEM UNTIL CI COULD PASS THEM, which trades
     # a real proof for a green tick. Recording the boundary is honest; moving it
     # is not.
+    # LINEAGE IS ASSERTED WHERE IT LIVES, and the tests carry `spark` for the
+    # same reason the warehouse assertions do: CI's service principal cannot
+    # reach the SQL API on this tier.
     Gate(
         name="test (integration)",
         command=("uv", "run", "pytest", "-m", "integration and not spark"),

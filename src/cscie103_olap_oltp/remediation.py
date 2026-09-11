@@ -42,12 +42,17 @@ learn for no additional guarantee.
 
 from __future__ import annotations
 
+import re
 from typing import Any
 
 from pydantic import BaseModel, ConfigDict
 
 __all__ = [
+    "BARE_BASE_MESSAGE",
+    "CODE_PATTERN",
+    "VIOLATION_MESSAGES",
     "ActionableError",
+    "ErrorCodeViolationError",
     "Finding",
     "registered_codes",
 ]
@@ -80,6 +85,67 @@ class Finding(BaseModel):
     context: dict[str, Any] = {}
 
 
+# THE GUARD'S MESSAGES, AS DATA RATHER THAN INLINE PROSE.
+#
+# Written as adjacent string literals inside each raise, every fragment was its
+# own mutable token -- twenty mutants corrupting mid-sentence text, none of them
+# killable without asserting the sentences word for word. Pinning prose exactly
+# makes every wording improvement a test failure, which is the opposite of what
+# these messages are for.
+#
+# AS TEMPLATES THEY ARE VALUES, and a test asserts the rendering of one template
+# rather than the concatenation of five fragments. The structured fields on
+# ErrorCodeViolationError remain the machine contract; this is the human half.
+# THE CONVENTION, AS ONE PATTERN RATHER THAN A COMPOUND CONDITION.
+#
+# `code.startswith("ERR_") and code.isupper()` was two checks joined by an
+# operator, and mutation testing flipped the `and` to `or` without any test
+# noticing -- because the only malformed fixture failed BOTH halves, so either
+# operator rejected it. A compound condition needs a case per half; a pattern
+# needs none, because there is no operator to flip.
+#
+# IT IS ALSO THE SINGLE PLACE THE CONVENTION IS WRITTEN DOWN. The messages
+# below describe it in prose for a human; this is the version that decides.
+CODE_PATTERN = re.compile(r"ERR_[A-Z0-9]+(?:_[A-Z0-9]+)*")
+
+VIOLATION_MESSAGES = {
+    "missing": (
+        "{offender} declares no code. Every ActionableError subclass must"
+        " declare one, or the failure cannot be aggregated. Use"
+        " `class X(ActionableError, abstract=True)` for an intermediate base."
+    ),
+    "malformed": (
+        "{offender} has code {code!r}; codes are upper case and begin with ERR_"
+        " so they are greppable across every output this repository writes."
+    ),
+    "duplicate": (
+        "{offender} uses code {code!r}, already registered by {incumbent}."
+        " Two failures sharing a code cannot be told apart."
+    ),
+}
+
+BARE_BASE_MESSAGE = "{name} declares no code; raise a subclass rather than ActionableError itself"
+
+
+class ErrorCodeViolationError(TypeError):
+    """A class declaration that breaks the error-code rules.
+
+    STRUCTURED, FOR THE SAME REASON ActionableError IS. The guard raised a bare
+    TypeError carrying a sentence, so the only way to assert what it found was
+    to match prose -- and matching exactly makes every wording change a test
+    failure, while matching a substring lets a corrupted message pass. A typed
+    attribute is the stable contract; the sentence is for the human.
+
+    A TypeError SUBCLASS, because that is what a bad class statement raises and
+    what callers already catch. The fields are additive.
+    """
+
+    def __init__(self, reason: str, **facts: object) -> None:
+        super().__init__(VIOLATION_MESSAGES[reason].format(**facts))
+        self.reason = reason
+        self.facts = facts
+
+
 class ActionableError(Exception):
     """An error that knows its own identity and its own fix.
 
@@ -108,37 +174,29 @@ class ActionableError(Exception):
         if abstract:
             return
 
-        code = cls.__dict__.get("code", "")
+        # NO DEFAULT, BECAUSE THE ONE HERE WAS REDUNDANT. `.get` returns None
+        # when absent and both are falsy, so `""` generated two mutants no test
+        # could distinguish. Removing the redundancy removes the mutants.
+        code = cls.__dict__.get("code")
         if not code:
-            raise TypeError(
-                f"{cls.__name__} declares no code. Every ActionableError "
-                "subclass must declare one, or the failure cannot be "
-                "aggregated. Use `class X(ActionableError, abstract=True)` for "
-                "an intermediate base."
-            )
+            raise ErrorCodeViolationError("missing", offender=cls.__name__)
 
-        if not (code.startswith("ERR_") and code.isupper()):
-            raise TypeError(
-                f"{cls.__name__} has code {code!r}; codes are upper case and "
-                "begin with ERR_ so they are greppable across every output this "
-                "repository writes"
-            )
+        if not CODE_PATTERN.fullmatch(code):
+            raise ErrorCodeViolationError("malformed", offender=cls.__name__, code=code)
 
         if code in _REGISTRY:
-            raise TypeError(
-                f"{cls.__name__} uses code {code!r}, already registered by "
-                f"{_REGISTRY[code].__name__}. Two failures sharing a code "
-                "cannot be told apart."
+            raise ErrorCodeViolationError(
+                "duplicate",
+                offender=cls.__name__,
+                code=code,
+                incumbent=_REGISTRY[code].__name__,
             )
 
         _REGISTRY[code] = cls
 
     def __init__(self, message: str, *, remediation: str, **context: Any) -> None:
         if not type(self).code:
-            raise NotImplementedError(
-                f"{type(self).__name__} declares no code; raise a subclass "
-                "rather than ActionableError itself"
-            )
+            raise NotImplementedError(BARE_BASE_MESSAGE.format(name=type(self).__name__))
 
         super().__init__(message)
         self.message = message

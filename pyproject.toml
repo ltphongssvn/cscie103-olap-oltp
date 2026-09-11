@@ -26,7 +26,18 @@ requires-python = "==3.12.3"
 # grain, nullability and statistical expectations".
 dependencies = [
   "pydantic>=2.10",
-  "pandera>=0.32",
+  # THE BACKEND IS AN EXTRA, AND OMITTING IT FAILS LATE AND VAGUELY.
+  #
+  # pandera ships five validation backends -- pandas, pyspark, polars, ibis,
+  # pyarrow -- and the documented practice is to install the extra for each one
+  # you use. The bare package imports fine, so the omission surfaces as
+  # "No module named 'pandas'" from a test file, naming neither pandera nor the
+  # missing extra.
+  #
+  # PANDAS NOW, PYSPARK WHEN THE JOBS ARRIVE. The same DataFrameModel validates
+  # both, so adding the pyspark extra later changes the dependency and not one
+  # line of contract.
+  "pandera[pandas]>=0.32",
   # AMBIENT PROCESS STATE, MADE A VALIDATED SNAPSHOT.
   #
   # THE PACKAGE ITSELF WAS MISSING HERE UNTIL NOW, WHICH IS WORTH RECORDING: an
@@ -54,6 +65,13 @@ dev = [
   # switch off type checking for every jsonschema call, and those calls are what
   # enforce the published artifact contract.
   "types-jsonschema>=4.23",
+  # REAL STUBS AGAIN, SURFACED BY disallow_any_unimported.
+  #
+  # That setting exists to catch untyped Anys leaking into our own signatures,
+  # and its first real find was here: every fixture returning a DataFrame
+  # became Any. pandas ships pandas-stubs, so the answer is to install them
+  # rather than add pandas to the ignore list and lose checking on every frame.
+  "pandas-stubs>=2.2",
   # ARCHITECTURE ENFORCED BY A LIBRARY BUILT FOR IT, NOT BY CUSTOM ANALYSIS.
   #
   # The boundary rules below were nearly implemented as bespoke AST walking plus

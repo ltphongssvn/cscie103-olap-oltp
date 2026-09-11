@@ -126,6 +126,22 @@ GATES: tuple[Gate, ...] = (
             "--check",
         ),
     ),
+    # THE PUBLISHED OLTP CONTRACTS MUST STILL DESCRIBE THE MODELS.
+    #
+    # A consumer holding contracts/oltp.schema.json has no pandera and no
+    # python: rename a column without regenerating and their reader breaks
+    # while every producer test here still passes.
+    Gate(
+        name="oltp contracts",
+        command=(
+            "uv",
+            "run",
+            "python",
+            "-m",
+            "cscie103_olap_oltp.oltp.publish",
+            "--check",
+        ),
+    ),
     # ARCHITECTURE, CHECKED BY A TOOL BUILT FOR IT.
     #
     # The module-level boundaries were previously held by docstrings and habit,

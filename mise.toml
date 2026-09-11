@@ -207,6 +207,13 @@ description = "Verify the declared module boundaries still hold"
 # checked by import-linter rather than by anything written here.
 run = "uv run lint-imports"
 
+[tasks."oltp:contracts"]
+description = "Regenerate the published OLTP contracts from the pandera models"
+# DELIBERATE, LIKE EVERY REGENERATION HERE. The committed file is what consumers
+# bind to, so rewriting it is a reviewable act rather than a side effect of
+# editing a model.
+run = "uv run python -m cscie103_olap_oltp.oltp.publish --generate"
+
 [tasks."check:env-template"]
 description = "Refuse a committed .env.example that disagrees with the model"
 # NAMED BY R017. The policy asserts this task exists, so renaming it without

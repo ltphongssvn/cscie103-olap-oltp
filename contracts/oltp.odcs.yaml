@@ -1,0 +1,96 @@
+apiVersion: v3.1.0
+kind: DataContract
+id: cscie103-olap-oltp-oltp
+version: 1.0.0
+status: active
+name: cscie103_olap_oltp_oltp
+description:
+  purpose: The OLTP model. Generated from src/cscie103_olap_oltp/oltp/contracts.py -- edit those models,
+    then run `mise run contracts:generate`.
+schema:
+- name: category
+  logicalType: object
+  description: "A product's category, SEPARATED TO REMOVE A TRANSITIVE DEPENDENCY.\n\n    Held on `product`\
+    \ instead, renaming a category would mean updating every\n    product row -- and a partial update\
+    \ leaves two names for one category."
+  properties:
+  - name: category_id
+    logicalType: integer
+    required: true
+    unique: true
+  - name: category_name
+    logicalType: string
+    required: true
+- name: customer
+  logicalType: object
+  description: Who placed an order. One row per customer.
+  properties:
+  - name: customer_id
+    logicalType: integer
+    required: true
+    unique: true
+  - name: full_name
+    logicalType: string
+    required: true
+  - name: email_domain
+    logicalType: string
+    required: true
+  - name: registered_at
+    logicalType: date
+    required: true
+- name: order
+  logicalType: object
+  description: A placed order. One row per order.
+  properties:
+  - name: order_id
+    logicalType: integer
+    required: true
+    unique: true
+  - name: customer_id
+    logicalType: integer
+    required: true
+  - name: ordered_at
+    logicalType: date
+    required: true
+  - name: status
+    logicalType: string
+    required: true
+- name: order_line
+  logicalType: object
+  description: "One line of an order. THE GRAIN IS (order_id, line_number).\n\n    order_id ALONE IS NOT\
+    \ UNIQUE HERE, by design -- an order has many lines.\n    Asserting the composite key is what stops\
+    \ a later fact table from\n    double-counting revenue, which is the classic failure when a fact is\
+    \ built\n    at a grain nobody stated."
+  properties:
+  - name: order_id
+    logicalType: integer
+    required: true
+  - name: line_number
+    logicalType: integer
+    required: true
+  - name: product_id
+    logicalType: integer
+    required: true
+  - name: quantity
+    logicalType: integer
+    required: true
+  - name: unit_price
+    logicalType: number
+    required: true
+- name: product
+  logicalType: object
+  description: What was sold. One row per product.
+  properties:
+  - name: product_id
+    logicalType: integer
+    required: true
+    unique: true
+  - name: product_name
+    logicalType: string
+    required: true
+  - name: category_id
+    logicalType: integer
+    required: true
+  - name: list_price
+    logicalType: number
+    required: true

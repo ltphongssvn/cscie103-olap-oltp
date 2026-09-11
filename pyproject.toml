@@ -51,6 +51,18 @@ dependencies = [
   # against a schema. Without this the published contract would be a document
   # nobody checks rather than something that can refuse a malformed artifact.
   "jsonschema>=4.23",
+  # THE DATA-CONTRACT STANDARD, NOT A FORMAT OF OUR OWN.
+  #
+  # ODCS v3.1.0 shipped under the Linux Foundation's Bitol project and the
+  # competing specification was deprecated in the same window -- contracts
+  # written in 2026 are written in ODCS. Publishing a bespoke JSON envelope
+  # instead would be inventing a standard that already exists, and no catalog
+  # or consumer tool would understand it.
+  #
+  # pyodcs IS THE REFERENCE IMPLEMENTATION: it parses and validates contracts
+  # locally, so nothing here re-implements the specification or vendors a
+  # schema copy that can drift from it.
+  "pyodcs>=0.9",
 ]
 
 [dependency-groups]
@@ -72,6 +84,10 @@ dev = [
   # became Any. pandas ships pandas-stubs, so the answer is to install them
   # rather than add pandas to the ignore list and lose checking on every frame.
   "pandas-stubs>=2.2",
+  # STUBS EXIST FOR PyYAML TOO. Same reasoning as jsonschema and pandas: check
+  # typeshed before suppressing, because suppression discards checking on every
+  # call rather than on the import alone.
+  "types-PyYAML>=6.0",
   # ARCHITECTURE ENFORCED BY A LIBRARY BUILT FOR IT, NOT BY CUSTOM ANALYSIS.
   #
   # The boundary rules below were nearly implemented as bespoke AST walking plus
@@ -218,7 +234,10 @@ enable_error_code = [
 # this project's concern -- and a blanket ignore_errors would hide real problems
 # in our own code.
 [[tool.mypy.overrides]]
-module = ["pandera.*", "pyspark.*", "presidio_analyzer.*", "spacy.*"]
+# pyodcs SHIPS NO STUBS AND NO py.typed MARKER, and no stub package exists --
+# the genuine case for this override, unlike jsonschema, pandas and PyYAML
+# where stubs were available and installing them was the right answer.
+module = ["pandera.*", "pyspark.*", "presidio_analyzer.*", "spacy.*", "pyodcs.*"]
 ignore_missing_imports = true
 
 [tool.pytest.ini_options]

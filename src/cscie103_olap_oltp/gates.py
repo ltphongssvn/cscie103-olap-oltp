@@ -126,19 +126,19 @@ GATES: tuple[Gate, ...] = (
             "--check",
         ),
     ),
-    # THE PUBLISHED OLTP CONTRACTS MUST STILL DESCRIBE THE MODELS.
+    # THE PUBLISHED DATA CONTRACTS MUST BE VALID ODCS AND STILL CURRENT.
     #
     # A consumer holding contracts/oltp.schema.json has no pandera and no
     # python: rename a column without regenerating and their reader breaks
     # while every producer test here still passes.
     Gate(
-        name="oltp contracts",
+        name="data contracts",
         command=(
             "uv",
             "run",
             "python",
             "-m",
-            "cscie103_olap_oltp.oltp.publish",
+            "cscie103_olap_oltp.contracts.publish",
             "--check",
         ),
     ),

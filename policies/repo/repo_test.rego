@@ -39,6 +39,9 @@ compliant := {
 		"policy_gate_fails_on_empty": true,
 		"tasks": [
 			{"name": "lint", "run": "uv run ruff check .", "is_multiline": false},
+			{"name": "check:architecture", "run": "uv run lint-imports", "is_multiline": false},
+			{"name": "check:env-template", "run": "uv run python -m x --check", "is_multiline": false},
+			{"name": "check:artifact-schema", "run": "uv run python -m y --check", "is_multiline": false},
 			{
 				"name": "types",
 				"run": "set -euo pipefail\nuv run mypy --platform darwin src tests",
@@ -341,4 +344,40 @@ test_r015_still_denies_a_durable_https_clone if {
 	cfg := mutate("git", {"origin_is_ssh": false, "is_ephemeral_checkout": false})
 	ids := {f.id | some f in repo.deny} with input as cfg
 	"R015" in ids
+}
+
+# --- R016 ---------------------------------------------------------------------
+
+test_r016_denies_an_ungated_architecture if {
+	# BOUNDARIES HELD BY REVIEW ARE CONVENTIONS. Losing the gate must be a
+	# violation rather than a quiet loss of enforcement.
+	cfg := mutate("mise", {"tasks": [{
+		"name": "lint",
+		"run": "uv run ruff check .",
+		"is_multiline": false,
+	}]})
+	ids := {f.id | some f in repo.deny} with input as cfg
+	"R016" in ids
+}
+
+test_r016_silent_when_gated if {
+	ids := {f.id | some f in repo.deny} with input as compliant
+	not "R016" in ids
+}
+
+# --- R017 ---------------------------------------------------------------------
+
+test_r017_denies_an_unverified_derived_contract if {
+	cfg := mutate("mise", {"tasks": [{
+		"name": "check:architecture",
+		"run": "uv run lint-imports",
+		"is_multiline": false,
+	}]})
+	ids := {f.id | some f in repo.deny} with input as cfg
+	"R017" in ids
+}
+
+test_r017_silent_when_both_contracts_are_verified if {
+	ids := {f.id | some f in repo.deny} with input as compliant
+	not "R017" in ids
 }

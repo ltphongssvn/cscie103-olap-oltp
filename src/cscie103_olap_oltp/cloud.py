@@ -34,7 +34,6 @@ denies a non-SSH origin, so the rule is refused rather than merely intended.
 
 from __future__ import annotations
 
-import os
 import re
 import subprocess
 import sys
@@ -281,7 +280,7 @@ def require_forwardable_agent() -> None:
                 '  eval "$(ssh-agent -s)"\n'
                 "  ssh-add --apple-use-keychain ~/.ssh/id_ed25519"
             ),
-            ssh_auth_sock=os.environ.get("SSH_AUTH_SOCK", "(unset)"),
+            ssh_auth_sock=current().ssh_auth_sock or "(unset)",
         )
 
     if listed.returncode == AGENT_EMPTY:

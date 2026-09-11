@@ -248,3 +248,45 @@ deny contains finding if {
 		),
 	}
 }
+
+# --- R016: the architecture is checked by a tool, not by review
+#
+# THE CONTRACT IS DERIVED, NOT MAINTAINED, and this rule keeps the derivation
+# honest. Boundaries described only in docstrings are conventions: four copies
+# of one environment check and three hardcoded endpoints reached main while
+# every docstring still claimed otherwise.
+#
+# THIS ASSERTS THE ENFORCEMENT IS WIRED; IT DOES NOT RE-DERIVE THE IMPORT GRAPH.
+# Each layer catches what the layer below cannot see -- import-linter reads real
+# imports, policy checks that somebody still runs it. Re-implementing the
+# analysis in Rego would be the duplication this repository refuses.
+deny contains finding if {
+	not task_exists("check:architecture")
+
+	finding := {
+		"id": "R016",
+		"reason_code": "ARCHITECTURE_NOT_GATED",
+		"message": "no check:architecture task; module boundaries would rest on review alone",
+	}
+}
+
+# --- R017: every derived contract is verified against its source
+#
+# A GENERATED FILE NOBODY REGENERATES IS A HAND-MAINTAINED FILE WEARING A
+# GENERATED HEADER. .env.example and the artifact schema are both rendered from
+# models, so each needs a gate that refuses a committed copy which disagrees.
+deny contains finding if {
+	some required in {"check:env-template", "check:artifact-schema"}
+	not task_exists(required)
+
+	finding := {
+		"id": "R017",
+		"reason_code": "DERIVED_CONTRACT_NOT_VERIFIED",
+		"message": sprintf("no %q task; a generated contract could drift from its model", [required]),
+	}
+}
+
+task_exists(name) if {
+	some task in input.mise.tasks
+	task.name == name
+}

@@ -26,10 +26,22 @@ would be caught in the pipeline rather than here, so the contracts validate it
 before it is ever written.
 """
 
+from pathlib import Path
+
 import pandas as pd
+import pytest
 
 from cscie103_olap_oltp.oltp.contracts import TABLES
-from cscie103_olap_oltp.oltp.seed import PRICE_CHANGE_AT, changed, rows
+from cscie103_olap_oltp.oltp.seed import (
+    CHANGED_PRODUCT,
+    EMPTY_CATEGORY,
+    PRICE_AFTER,
+    PRICE_BEFORE,
+    PRICE_CHANGE_AT,
+    STOCKED_CATEGORIES,
+    changed,
+    rows,
+)
 
 
 def test_every_seeded_table_satisfies_its_contract() -> None:
@@ -140,3 +152,126 @@ def test_only_the_changed_product_is_versioned_twice() -> None:
 
     assert len(versioned_twice) == 1
     assert len(after) == len(versioned_twice), "unchanged rows must not be resent"
+
+
+def test_every_product_points_at_a_category_that_exists() -> None:
+    """REFERENTIAL INTEGRITY WITHIN THE FIXTURE.
+
+    A mutant changed a category_id unnoticed, because the tests asserted that
+    SOME category was unused rather than which. A product whose foreign key
+    matches nothing yields "Unknown" in the dimension and looks like a correct
+    denormalisation.
+    """
+    seeded = rows()
+    categories = set(seeded["category"]["category_id"])
+    used = set(seeded["product"]["category_id"])
+
+    assert used <= categories, "a product references a category that does not exist"
+    assert set(STOCKED_CATEGORIES) == used
+    assert EMPTY_CATEGORY in categories and EMPTY_CATEGORY not in used
+
+
+def test_the_change_load_selects_the_changed_product_not_the_others() -> None:
+    """`==` FILTERS IN; A MUTANT MADE IT `!=`, WHICH FILTERS OUT.
+
+    The feed would then carry every UNCHANGED product at the new price and omit
+    the one that actually changed -- versioning the wrong rows and recording a
+    price change on products nobody touched.
+    """
+    after = changed()["product"]
+
+    assert list(after["product_id"]) == [CHANGED_PRODUCT]
+
+
+def test_only_one_order_line_dangles_and_it_is_deliberate() -> None:
+    """THE UNKNOWN-MEMBER CASE MUST BE THE ONLY MISS.
+
+    If another line failed to resolve, the Unknown test would pass for the
+    wrong reason -- counting a fixture mistake as the case it meant to prove.
+    """
+    seeded = rows()
+    dangling = set(seeded["order_line"]["product_id"]) - set(seeded["product"]["product_id"])
+
+    assert len(dangling) == 1, "exactly one deliberate dangling reference"
+    assert CHANGED_PRODUCT in set(seeded["order_line"]["product_id"])
+
+
+def test_the_change_carries_a_real_price_and_a_different_one() -> None:
+    """THE NEW PRICE IS THE ENTIRE POINT, AND IT WAS UNASSERTED.
+
+    A mutant set it to None: the feed would carry a null price, the dimension
+    would version to it, and every historical total would be wrong while the
+    pipeline reported COMPLETED. Asserting "a change happened" is not enough --
+    the changed value has to be a usable number.
+    """
+    after = changed()["product"]
+    price = after.iloc[0]["list_price"]
+
+    assert price == PRICE_AFTER
+    assert price != PRICE_BEFORE, "a change that changes nothing versions nothing"
+    assert price > 0, "a null or zero price would silently zero every line total"
+
+
+def test_the_order_lines_charge_the_price_in_force_at_the_time() -> None:
+    """THE FIXTURE MUST AGREE WITH ITSELF, or the as-of join is tested against
+    data that was never consistent."""
+    lines = rows()["order_line"]
+    charged = set(lines["unit_price"])
+
+    assert PRICE_BEFORE in charged, "the February order pays the old price"
+    assert PRICE_AFTER in charged, "the April order pays the new price"
+
+
+def test_the_change_load_satisfies_the_contract_too() -> None:
+    """EVERY TRANSFORMATION'S OUTPUT IS A BOUNDARY, AND THIS ONE WAS UNCHECKED.
+
+    The contract test validated rows() and never changed(), so mutants turning
+    `reset_index(drop=True)` into drop=False or drop=None survived. With
+    drop=False pandas keeps the old positions as an extra `index` column, and
+    strict mode would reject it -- at load time, against a real table, rather
+    than here where it costs nothing.
+
+    THE RULE IS "VALIDATE AFTER EACH TRANSFORMATION", not "validate the input".
+    """
+    for name, frame in changed().items():
+        TABLES[name].validate(frame)
+        assert "index" not in frame.columns, "reset_index leaked the old positions"
+        assert list(frame.index) == list(range(len(frame)))
+
+
+def test_a_missing_seed_file_fails_loudly(monkeypatch, tmp_path: Path) -> None:  # type: ignore[no-untyped-def]
+    """AN ABSENT SEED MUST NOT PRODUCE EMPTY FRAMES.
+
+    An empty load runs to COMPLETED having done nothing -- the vacuous success
+    this repository keeps removing. The file is the input; its absence is a
+    failure, not a default.
+    """
+    from cscie103_olap_oltp.oltp import seed
+
+    monkeypatch.setattr(seed, "SEED_PATH", tmp_path / "absent.yaml")
+
+    with pytest.raises(SystemExit) as caught:
+        seed.rows()
+
+    assert "seed data missing" in str(caught.value)
+
+
+def test_the_date_columns_arrive_as_timestamps() -> None:
+    """YAML HAS NO TIMESTAMP THIS PROJECT RELIES ON, so they are written as
+    strings and converted here. Left as strings the contract rejects them, and
+    the as-of join would have nothing to compare."""
+    orders = rows()["order"]
+
+    assert str(orders["ordered_at"].dtype) == "datetime64[ns]"
+    assert (orders["ordered_at"] < PRICE_CHANGE_AT).any()
+    assert (orders["ordered_at"] > PRICE_CHANGE_AT).any()
+
+
+def test_only_the_declared_columns_are_converted() -> None:
+    """CONVERTING BY SUFFIX WOULD BE A GUESS. A column ending in _at that
+    legitimately held text would be silently parsed; the list is explicit so
+    that choice is visible."""
+    from cscie103_olap_oltp.oltp.seed import TIMESTAMP_COLUMNS
+
+    assert {"registered_at", "ordered_at"} == TIMESTAMP_COLUMNS
+    assert str(rows()["customer"]["email_domain"].dtype) != "datetime64[ns]"

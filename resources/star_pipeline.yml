@@ -57,7 +57,10 @@ resources:
         # attempt defaulted to "." inside the source, which resolved relative to
         # the executor's working directory and failed with a FileNotFound naming
         # a path nobody chose.
-        bundle.sourcePath: /Workspace/${workspace.file_path}
+        # NO /Workspace PREFIX. workspace.file_path ALREADY CARRIES IT, and the
+        # CLI warns that prepending it produces a doubled path -- which resolved
+        # here only because the duplicate happened to collapse.
+        bundle.sourcePath: ${workspace.file_path}
 
         oltp_catalog: ${var.catalog}
         # THE SAME REASONING, and the same dependency: the pipeline must not run

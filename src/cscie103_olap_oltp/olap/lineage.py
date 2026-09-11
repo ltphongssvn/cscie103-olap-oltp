@@ -22,7 +22,7 @@ from __future__ import annotations
 
 from cscie103_olap_oltp.olap.warehouse import olap_schema, query
 
-__all__ = ["LINEAGE_TABLE", "OLAP_TABLES", "upstream_of"]
+__all__ = ["LINEAGE_TABLE", "OLAP_TABLES", "OLTP_TABLES", "upstream_of"]
 
 # THE SYSTEM TABLE, NOT THE REST API. Both expose the same capture; SQL is what
 # this project already speaks, and the API returns only DIRECT parents and
@@ -33,8 +33,12 @@ LINEAGE_TABLE = "system.access.table_lineage"
 # OUR graph; a query over everything would drown in the sibling project.
 OLAP_TABLES = ("dim_customer", "dim_product", "fact_order_line")
 
+# THE SOURCE TABLES, NAMED SO THE CYCLE CHECK HAS SOMETHING TO ASK ABOUT.
+# A warehouse feeding a source is the edge that turns a batch into a loop.
+OLTP_TABLES = ("category", "customer", "order", "order_line", "product")
 
-def upstream_of(table: str) -> set[str]:
+
+def upstream_of(table: str, schema: str | None = None) -> set[str]:
     """The tables that fed `table`, as recorded by the platform.
 
     DISTINCT, BECAUSE THE RAW TABLE IS AN EVENT LOG. It holds one row per read
@@ -48,7 +52,7 @@ def upstream_of(table: str) -> set[str]:
         f"SELECT DISTINCT source_table_full_name AS source FROM {LINEAGE_TABLE} "  # noqa: S608
         "WHERE target_table_full_name = :target "
         "AND source_table_full_name IS NOT NULL",
-        target=f"{olap_schema()}.{table}",
+        target=f"{schema or olap_schema()}.{table}",
     )
 
     return {row["source"] for row in rows}

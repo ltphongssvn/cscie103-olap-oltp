@@ -207,6 +207,19 @@ description = "Verify the declared module boundaries still hold"
 # checked by import-linter rather than by anything written here.
 run = "uv run lint-imports"
 
+[tasks."mutants"]
+description = "Mutation-test the domain modules and list survivors"
+# NOT IN THE GATE, AND THAT IS A COST DECISION RATHER THAN A JUDGEMENT.
+#
+# A full run is ~4200 mutants at ~11/second: over an hour, because the suite
+# runs once per mutant. Putting that on every commit would train people to
+# bypass the hook, which is how a gate becomes decoration.
+#
+# THE DOCUMENTED POLICY IS "NO NEW SURVIVORS IN PROTECTED MODULES", reviewed
+# deliberately rather than enforced per push. Run it when changing the domain
+# logic; the survivors it lists are the assertions worth writing next.
+run = "uv run mutmut run --max-children 4"
+
 [tasks."contracts:generate"]
 description = "Regenerate the published ODCS data contracts from the pandera models"
 # DELIBERATE, LIKE EVERY REGENERATION HERE. The committed file is what consumers

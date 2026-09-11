@@ -29,7 +29,8 @@ pipeline that never converges rather than an error anybody reads.
 
 import pytest
 
-from cscie103_olap_oltp.olap.lineage import OLAP_TABLES, upstream_of
+from cscie103_olap_oltp.olap.lineage import OLAP_TABLES, OLTP_TABLES, upstream_of
+from cscie103_olap_oltp.olap.warehouse import oltp_schema
 
 pytestmark = [pytest.mark.integration, pytest.mark.spark]
 
@@ -75,9 +76,23 @@ def test_no_olap_table_depends_on_another_catalog() -> None:
             assert name.startswith("cscie103_olap_oltp."), f"{table} reaches {name}"
 
 
-def test_the_oltp_side_depends_on_nothing_in_olap() -> None:
-    """NO CYCLE. A dependency from source back into the warehouse turns a batch
-    into a loop that never converges, and nothing reports an error."""
-    for table in OLAP_TABLES:
-        for name in upstream_of(table):
-            assert ".olap" not in name.replace(table, ""), f"{table} reads its own schema"
+def test_a_source_table_is_fed_by_nothing() -> None:
+    """NO CYCLE, ASSERTED SO THAT IT CAN ACTUALLY FAIL.
+
+    TWO EARLIER VERSIONS PASSED WITHOUT CHECKING ANYTHING, both by the same
+    mechanism: an assertion inside a loop that never ran. The first asked
+    whether an OLAP table's upstream mentioned ".olap" -- fact_order_line
+    legitimately reads both dimensions, and it went green only because a
+    `.replace()` mangled the string. The second iterated each source's upstream
+    looking for warehouse tables; a source has no upstream, so the body never
+    executed.
+
+    THE ASSERTION IS NOW THE ABSENCE ITSELF, which is falsifiable: one edge
+    from the warehouse back into oltp and this fails. That edge turns a batch
+    into a loop which never converges and reports no error.
+    """
+    schema = oltp_schema()
+
+    for table in OLTP_TABLES:
+        upstream = upstream_of(table, schema=schema)
+        assert not upstream, f"{table} is a source but is fed by {upstream}"

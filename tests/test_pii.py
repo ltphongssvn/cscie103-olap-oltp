@@ -156,6 +156,15 @@ def test_scannable_files_excludes_lockfiles() -> None:
     assert "flake.lock" not in names
 
 
+@pytest.mark.skipif(
+    not (REPO_ROOT / ".git").exists(),
+    reason=(
+        "enumerates git-tracked files, so it requires a real checkout. "
+        "mutmut copies the tree into ./mutants/, which is not a repository -- "
+        "the test then reports an empty set and fails for a reason that has "
+        "nothing to do with the code under test."
+    ),
+)
 def test_scannable_files_finds_real_source() -> None:
     """FAIL CLOSED ON AN EMPTY LIST.
 

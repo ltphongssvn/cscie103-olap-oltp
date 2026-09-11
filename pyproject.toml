@@ -95,6 +95,14 @@ dev = [
   # which is the debt this repository refuses everywhere else. import-linter
   # compares real imports against declared contracts and fails the build.
   "import-linter>=2.11",
+  # THE AUDIT THAT COVERAGE CANNOT BE. Coverage says a line ran; mutation
+  # testing changes the line and requires a test to NOTICE -- which is the only
+  # way to find an assertion that cannot fail.
+  #
+  # THIS SESSION WROTE THREE OF THOSE, all caught by reading rather than by a
+  # gate: two lineage checks whose loop body never executed, and a `grep -c`
+  # that counted comment lines. Reading is not a control.
+  "mutmut>=3.2",
   # PII DETECTION BY CONTENT, NOT BY PATH.
   #
   # The structural controls -- .gitignore rules and the hygiene gate's extension
@@ -139,6 +147,15 @@ line-length = 100
 # known-first-party = [...] goes stale once per module added, and the failure is
 # silent: imports sort as third-party until lint eventually says so.
 src = ["src", "tests"]
+
+
+# GENERATED OUTPUT IS NOT SOURCE. mutmut writes a full mutated copy of the tree
+# into ./mutants/, and linting it reported 348 findings about code no human
+# wrote -- mangled names, deliberately broken statements, injected imports.
+#
+# A GATE THAT REPORTS ON ITS OWN SCRATCH SPACE IS NOISE, and noise is how a gate
+# stops being read.
+extend-exclude = ["mutants"]
 
 [tool.ruff.lint]
 # Deliberately broader than defaults. S is bandit: executed CODE gets checked,
@@ -214,7 +231,7 @@ strict = true
 # pipelines/ is excluded for the same reason: `dlt` and `spark` have no
 # importable types, so every line would report the checker's model rather than
 # the code.
-exclude = ["notebooks/.*", "pipelines/.*"]
+exclude = ["notebooks/.*", "pipelines/.*", "mutants/.*"]
 
 # --- Fail closed --------------------------------------------------------------
 # strict = true is not the ceiling. These turn silence into failure.
@@ -329,3 +346,73 @@ forbidden_modules = [
   "cscie103_olap_oltp.gates",
   "cscie103_olap_oltp.ledger",
 ]
+
+
+# --- Mutation testing ----------------------------------------------------------
+#
+# SCOPED TO PURE MODULES, DELIBERATELY. The documented guidance is that pure
+# functions beat orchestration code and that real network calls must be replaced
+# -- mutation testing runs the suite once per mutant, so a module needing a
+# warehouse would take hours and magnify any flake into a false survivor.
+#
+# THESE FOUR ARE THE DOMAIN LOGIC: contracts, generated DDL, seed invariants and
+# the ledger's hash chain. Each is a pure function of its inputs, each has tests
+# that claim to check behaviour, and each is where a weak assertion would matter.
+# THE 3.x KEY NAMES. `paths_to_mutate` and `tests_dir` are the 2.x spelling; the
+# deprecation shim for the latter concatenates a string to a list and crashes
+# before mutmut starts, so the old names are not merely warned about -- they
+# fail. The warnings name the replacements exactly.
+[tool.mutmut]
+# THE WHOLE PACKAGE, NOT FOUR FILES, AND THAT IS NOT A PREFERENCE.
+#
+# mutmut copies source into ./mutants/ and runs pytest there. Naming individual
+# files copies only those, so the rest of the package is absent and every test
+# dies on `No module named cscie103_olap_oltp.git` -- which is what happened.
+#
+# THE FAILURE MODE IF THIS IS WRONG IS WORSE THAN A CRASH. With a src layout and
+# an editable install, the .pth still points at the real src/, so a partially
+# copied tree can import the ORIGINAL un-mutated code and report every mutant as
+# survived. A mutation score computed that way is not weak evidence; it is
+# false evidence. (mutmut #486.)
+source_paths = ["src/"]
+pytest_add_cli_args_test_selection = ["tests/"]
+
+# THE FILES THE TESTS READ FROM DISK, WHICH mutmut DOES NOT COPY BY DEFAULT.
+#
+# It copies source and tests; everything else is absent from ./mutants/. Several
+# gates here read COMMITTED ARTIFACTS -- the artifact schema, the ODCS contracts,
+# the generated streaming-table schemas -- and those tests fail on a missing file
+# rather than on a mutant, which stops the run before a single mutant is judged.
+#
+# THIS IS THE also_copy MECHANISM DOING ITS JOB, not a workaround: a derived
+# artifact is part of the fixture surface for a repository that gates on drift.
+also_copy = [
+  "contracts/",
+  "policies/",
+  "databricks.yml",
+  "resources/",
+  ".python-version",
+  # THE POLICY SNAPSHOT READS THIS DIRECTLY, so its absence fails evaluation
+  # before any rule is evaluated -- a missing-file error wearing a policy
+  # violation's clothes.
+  "mise.toml",
+  ".github/",
+  "flake.nix",
+  "lefthook.yml",
+]
+
+# WHAT THIS FOUND ON ITS FIRST RUN, recorded because the number is the point:
+# the ledger scored 128 killed against 87 survived. One survivor was real --
+# dropping `separators` from the hash material changed every digest in the chain
+# and thirteen tests did not notice. Two known-answer tests now kill it, taking
+# compute_hash from 8/22 to 21/22.
+#
+# THE REMAINING SURVIVOR IS AN EQUIVALENT MUTANT: "utf-8" to "UTF-8" names the
+# same codec, so no test can distinguish them. Detecting equivalents is
+# undecidable in general, and they are the documented reason a mutation score
+# never reaches 100 -- chasing this one would mean writing a test that asserts
+# nothing.
+#
+# SCOPE BY MUTANT NAME AT THE COMMAND, NOT BY TRUNCATING THE COPY. mutmut
+# supports Unix-style patterns -- `mutmut run "cscie103_olap_oltp.ledger*"` --
+# which restricts what RUNS while leaving the tree importable.

@@ -29,7 +29,7 @@ before it is ever written.
 import pandas as pd
 
 from cscie103_olap_oltp.oltp.contracts import TABLES
-from cscie103_olap_oltp.oltp.seed import PRICE_CHANGE_AT, rows
+from cscie103_olap_oltp.oltp.seed import PRICE_CHANGE_AT, changed, rows
 
 
 def test_every_seeded_table_satisfies_its_contract() -> None:
@@ -103,3 +103,40 @@ def test_the_seed_is_deterministic() -> None:
     """A RANDOM FIXTURE MAKES A FAILING RUN UNREPRODUCIBLE, which is the worst
     property a fixture can have."""
     pd.testing.assert_frame_equal(rows()["order_line"], rows()["order_line"])
+
+
+def test_the_change_load_carries_only_what_changed() -> None:
+    """OBSERVED IN THE WAREHOUSE: product 200 grew a second version despite
+    never changing.
+
+    The change load resent every product row with a later timestamp, and
+    AUTO CDC versions on the SEQUENCE, not on a value comparison -- a resent row
+    is a new version whether or not anything differs. History then records edits
+    that never happened, and "when did this price change" answers wrongly.
+
+    THE FIX IS AT THE SOURCE: a change feed carries changes.
+    """
+    before = {row.product_id: row for row in rows()["product"].itertuples()}
+    after = changed()["product"]
+
+    assert len(after) == 1, "the change load must carry only the changed product"
+
+    only = after.iloc[0]
+    assert only["list_price"] != before[only["product_id"]].list_price
+
+
+def test_only_the_changed_product_is_versioned_twice() -> None:
+    """THE INVARIANT THE WAREHOUSE CONFIRMED, PINNED SO IT CANNOT REGRESS.
+
+    Exactly one product changes, so exactly one product may have a second
+    version. A feed that resends unchanged rows versions everything, and the
+    resulting keys look plausible enough to pass a spot check -- which is how
+    this was nearly diagnosed as an identity-column fault instead.
+    """
+    before = rows()["product"]
+    after = changed()["product"]
+
+    versioned_twice = set(after["product_id"]) & set(before["product_id"])
+
+    assert len(versioned_twice) == 1
+    assert len(after) == len(versioned_twice), "unchanged rows must not be resent"

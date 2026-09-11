@@ -102,8 +102,19 @@ def changed() -> dict[str, pd.DataFrame]:
     difference; resending unchanged rows would still be correct but would say
     nothing about whether change detection works.
     """
+    # ONLY THE CHANGED ROW, AND THE WAREHOUSE SHOWED WHY.
+    #
+    # A first version resent every product with a later timestamp. AUTO CDC
+    # versions on the SEQUENCE rather than by comparing values, so product 200
+    # -- untouched -- gained a second version identical to its first. History
+    # then records an edit that never happened, and "when did this price change"
+    # answers with the load time instead.
+    #
+    # A CHANGE FEED CARRIES CHANGES. That is what the name means, and sending
+    # the full catalogue is a SNAPSHOT, which is a different API
+    # (AUTO CDC FROM SNAPSHOT) that diffs for you.
     first = rows()["product"]
-    after = first.copy()
-    after.loc[after["product_id"] == 100, "list_price"] = 11.99
+    after = first[first["product_id"] == 100].copy()
+    after["list_price"] = 11.99
 
-    return {"product": after}
+    return {"product": after.reset_index(drop=True)}

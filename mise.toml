@@ -212,7 +212,14 @@ description = "Regenerate the published ODCS data contracts from the pandera mod
 # DELIBERATE, LIKE EVERY REGENERATION HERE. The committed file is what consumers
 # bind to, so rewriting it is a reviewable act rather than a side effect of
 # editing a model.
-run = "uv run python -m cscie103_olap_oltp.contracts.publish --generate"
+# set -euo pipefail IS REQUIRED BY R004, AND THE RULE EARNED IT HERE.
+# Without it the second generator runs even when the first fails, leaving one
+# artifact fresh and one stale -- and `contracts:generate` reporting success.
+run = """
+set -euo pipefail
+uv run python -m cscie103_olap_oltp.contracts.publish --generate
+uv run python -m cscie103_olap_oltp.olap.ddl --generate
+"""
 
 [tasks."check:env-template"]
 description = "Refuse a committed .env.example that disagrees with the model"

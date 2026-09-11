@@ -126,6 +126,15 @@ GATES: tuple[Gate, ...] = (
             "--check",
         ),
     ),
+    # THE PIPELINE'S SCHEMAS MUST STILL MATCH THE DIMENSION CONTRACTS.
+    #
+    # The pipeline reads a generated file at runtime, so a stale copy is a
+    # failed pipeline update rather than a failed test -- which is the slowest
+    # possible place to learn a column was renamed.
+    Gate(
+        name="streaming tables",
+        command=("uv", "run", "python", "-m", "cscie103_olap_oltp.olap.ddl", "--check"),
+    ),
     # THE PUBLISHED DATA CONTRACTS MUST BE VALID ODCS AND STILL CURRENT.
     #
     # A consumer holding contracts/oltp.schema.json has no pandera and no

@@ -1,0 +1,4 @@
+{
+  "dim_customer": "customer_key BIGINT GENERATED ALWAYS AS IDENTITY,\ncustomer_id BIGINT,\nfull_name STRING,\nemail_domain STRING,\nupdated_at TIMESTAMP,\n__START_AT TIMESTAMP,\n__END_AT TIMESTAMP",
+  "dim_product": "product_key BIGINT GENERATED ALWAYS AS IDENTITY,\nproduct_id BIGINT,\nproduct_name STRING,\ncategory_name STRING,\nlist_price DOUBLE,\nupdated_at TIMESTAMP,\n__START_AT TIMESTAMP,\n__END_AT TIMESTAMP"
+}

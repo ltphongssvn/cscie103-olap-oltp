@@ -42,6 +42,9 @@ code, so it does not sit in the importable package at all.
 
 from __future__ import annotations
 
+import json
+from pathlib import Path
+
 import dlt  # type: ignore[import-not-found]  # provided by the pipeline runtime
 from pyspark.sql import functions as F
 
@@ -61,42 +64,30 @@ OLTP = "{}.{}".format(
 # THE TARGET IS DECLARED EMPTY, then filled by the flow below. That split is how
 # Lakeflow expresses "this table is maintained as SCD2" rather than "this table
 # is the result of one query".
-# THE SURROGATE KEY IS DECLARED, AND THAT IS THE NATIVE ANSWER.
+# THE DIMENSION SCHEMAS ARE READ, NOT WRITTEN HERE.
 #
-# FOUND BY RUNNING IT: the fact flow failed with "Attribute `customer_key` is
-# not supported. Did you mean: 'customer_id'?" -- AUTO CDC versions rows with
-# __START_AT and __END_AT but adds no key of its own unless the target declares
-# one. The documented pattern is an IDENTITY column on the streaming table.
+# An IDENTITY surrogate key requires a SPECIFIED target schema, and specifying
+# one replaces the inferred schema -- so this file briefly spelled out every
+# column, duplicating the pandera contracts with nothing checking agreement.
 #
-# THE TEMPTING WORKAROUND WAS A HASH of (business key, version start). It would
-# have worked, and it would have been hand-rolled key management -- precisely
-# what this file exists to avoid. GENERATED ALWAYS gives dense integers, one per
-# VERSION, which is what a surrogate key is for.
-#
-# DECLARING THE SCHEMA MEANS DECLARING __START_AT AND __END_AT TOO. The docs are
-# explicit: for SCD Type 2, a specified target schema must include them, with
-# the same type as sequence_by. An explicit schema REPLACES the inferred one, so
-# omitting them removes the validity columns the fact's as-of join needs -- which
-# is how this failed on columns that had existed a moment earlier.
-#
-# AN IDENTITY COLUMN DISABLES CONCURRENT TRANSACTIONS on the table. Acceptable
-# for a dimension one pipeline owns; worth knowing before a second writer is
-# ever added.
-#
-# THE COST IS REAL: this list and the pandera contract describe one table in two
-# places, and nothing yet checks they agree. That gate is what this needs next.
+# A SINGLE SOURCE OF TRUTH STORES EACH DATA ELEMENT EXACTLY ONCE. The contracts
+# render contracts/olap.streaming-tables.json, a gate refuses a stale copy, and
+# this reads it. The pipeline cannot import the package -- `dlt` exists only in
+# this runtime -- so a committed file is how the boundary is crossed.
+# NO DEFAULT FOR sourcePath, DELIBERATELY. A "." fallback turned a missing
+# configuration into a relative path resolved against the executor's working
+# directory -- a FileNotFoundError naming a location nobody configured. Reading
+# the key without a default fails immediately and says which key is absent.
+SCHEMAS = json.loads(
+    (
+        Path(spark.conf.get("bundle.sourcePath")) / "contracts" / "olap.streaming-tables.json"
+    ).read_text(encoding="utf-8")
+)
+
+
 dlt.create_streaming_table(
     name="dim_product",
-    schema="""
-        product_key BIGINT GENERATED ALWAYS AS IDENTITY,
-        product_id BIGINT,
-        product_name STRING,
-        category_name STRING,
-        list_price DOUBLE,
-        updated_at TIMESTAMP,
-        __START_AT TIMESTAMP,
-        __END_AT TIMESTAMP
-    """,
+    schema=SCHEMAS["dim_product"],
     comment="Product dimension, SCD Type 2. Denormalised: carries category_name.",
     expect_all_or_drop={
         "product_id_present": "product_id IS NOT NULL",
@@ -151,15 +142,7 @@ dlt.create_auto_cdc_flow(
 
 dlt.create_streaming_table(
     name="dim_customer",
-    schema="""
-        customer_key BIGINT GENERATED ALWAYS AS IDENTITY,
-        customer_id BIGINT,
-        full_name STRING,
-        email_domain STRING,
-        updated_at TIMESTAMP,
-        __START_AT TIMESTAMP,
-        __END_AT TIMESTAMP
-    """,
+    schema=SCHEMAS["dim_customer"],
     comment="Customer dimension, SCD Type 2. Carries an email DOMAIN, never an address.",
     expect_all_or_drop={
         "customer_id_present": "customer_id IS NOT NULL",

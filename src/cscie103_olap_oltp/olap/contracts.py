@@ -69,7 +69,34 @@ class _Star(pa.DataFrameModel):
         coerce = True
 
 
-class DimProduct(_Star):
+class Versioned(_Star):
+    """A dimension whose history is maintained as SCD Type 2.
+
+    THE CAPABILITY IS DECLARED, NOT INFERRED, AND THAT IS A DDD POSITION.
+    An earlier version selected versioned tables by a `dim_` name prefix and
+    swept in dim_date -- a conformed calendar, which has no history because a
+    date does not change. The next attempt sniffed for validity columns, which
+    was correct but still deduced a capability from its symptoms.
+
+    A MIXIN SAYS IT OUTRIGHT: inheriting this IS the claim "AUTO CDC maintains
+    my history", and the validity columns come with it rather than being
+    repeated per dimension. A table that stops being versioned changes its base
+    class, which is a reviewable act rather than a silent column deletion.
+
+    THE VALIDITY INTERVAL IS THE DOMAIN'S VOCABULARY. Lakeflow calls the same
+    thing __START_AT and __END_AT; the translation lives in olap/ddl.py, not
+    here, because a reader of the dimension should never meet the framework.
+    """
+
+    valid_from: Series[pd.Timestamp] = pa.Field(nullable=False)
+
+    # NULL MEANS "STILL TRUE", which is why this column alone is nullable.
+    valid_to: Series[pd.Timestamp] = pa.Field(nullable=True)
+
+    is_current: Series[bool] = pa.Field(nullable=False)
+
+
+class DimProduct(Versioned):
     """What was sold, versioned. SCD TYPE 2: one row per product per version."""
 
     product_key: Series[int] = pa.Field(ge=UNKNOWN_KEY, unique=True)
@@ -85,15 +112,8 @@ class DimProduct(_Star):
 
     list_price: Series[float] = pa.Field(ge=0)
 
-    valid_from: Series[pd.Timestamp] = pa.Field(nullable=False)
 
-    # NULL MEANS "STILL TRUE", which is why this column alone is nullable.
-    valid_to: Series[pd.Timestamp] = pa.Field(nullable=True)
-
-    is_current: Series[bool] = pa.Field(nullable=False)
-
-
-class DimCustomer(_Star):
+class DimCustomer(Versioned):
     """Who bought, versioned. SCD Type 2, same shape as DimProduct."""
 
     customer_key: Series[int] = pa.Field(ge=UNKNOWN_KEY, unique=True)
@@ -104,10 +124,6 @@ class DimCustomer(_Star):
     # Denormalisation copies attributes, so a personal field here would be
     # duplicated across every version rather than held once.
     email_domain: Series[str] = pa.Field(nullable=False)
-
-    valid_from: Series[pd.Timestamp] = pa.Field(nullable=False)
-    valid_to: Series[pd.Timestamp] = pa.Field(nullable=True)
-    is_current: Series[bool] = pa.Field(nullable=False)
 
 
 class DimDate(_Star):

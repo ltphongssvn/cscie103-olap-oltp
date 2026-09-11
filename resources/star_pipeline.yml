@@ -50,6 +50,15 @@ resources:
         # a pipeline reading a literal "oltp" works in prod and silently finds
         # nothing in dev. The effective name is composed here, where the prefix
         # is known.
+        # WHERE THE PIPELINE FINDS ITS GENERATED SCHEMAS.
+        #
+        # The source file reads contracts/olap.streaming-tables.json at import
+        # time, and the deployed workspace path is only knowable here. A first
+        # attempt defaulted to "." inside the source, which resolved relative to
+        # the executor's working directory and failed with a FileNotFound naming
+        # a path nobody chose.
+        bundle.sourcePath: /Workspace/${workspace.file_path}
+
         oltp_catalog: ${var.catalog}
         # THE SAME REASONING, and the same dependency: the pipeline must not run
         # before the schema it reads exists.

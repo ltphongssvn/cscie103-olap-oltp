@@ -207,18 +207,70 @@ description = "Verify the declared module boundaries still hold"
 # checked by import-linter rather than by anything written here.
 run = "uv run lint-imports"
 
+[tasks."mutants:stats"]
+description = "Write the per-file mutation baseline from the last full run"
+# THE RATCHET IS A MAINTAINED TOOL, NOT CODE WRITTEN HERE.
+#
+# A hand-rolled version lived in src/ for one afternoon and was deleted. It
+# parsed `mutmut results`, which prints only the mutants it has JUDGED -- so a
+# partial run left 4021 mutants unmeasured and the gate reported them clean. A
+# gate that passes because it did not look is the shape this repo keeps
+# removing, and it appeared in the module written to prevent it.
+#
+# mutmut-ratchet is the de-duplicated form of exactly those helpers, with a
+# per-file baseline and a tolerance band for run-to-run variance.
+#
+# uvx, NOT uv add: the tool needs Python >= 3.14 and this project is pinned to
+# 3.12.3 for Databricks Serverless parity -- which the `env parity` gate exists
+# to hold. uvx runs it in its own isolated environment, so the pin is untouched.
+# `stats` EMITS RAW COUNTS; THE COMPARATOR READS A `score` PER FILE. Saving the
+# stats output straight to the baseline produced a KeyError on the first check
+# -- `ratchet --update` is what writes the baseline in the shape it later reads.
+run = """
+set -euo pipefail
+uvx --python 3.14 --from mutmut-ratchet mutmut-ratchet stats \
+  --package-path src/cscie103_olap_oltp \
+  --package-dotted cscie103_olap_oltp > /tmp/mutation-stats.json
+uvx --python 3.14 --from mutmut-ratchet mutmut-ratchet ratchet \
+  --mode floor --update \
+  --stats /tmp/mutation-stats.json \
+  --baseline contracts/mutation-baseline.json \
+  --package-path src/cscie103_olap_oltp \
+  --package-dotted cscie103_olap_oltp
+"""
+
+[tasks."mutants:check"]
+description = "Fail if any file's mutation score regressed against the baseline"
+# --mode floor: IMPROVEMENTS NEVER FAIL. The gate is a ratchet, not a target.
+run = """
+set -euo pipefail
+uvx --python 3.14 --from mutmut-ratchet mutmut-ratchet stats \
+  --package-path src/cscie103_olap_oltp \
+  --package-dotted cscie103_olap_oltp > /tmp/mutation-stats.json
+uvx --python 3.14 --from mutmut-ratchet mutmut-ratchet ratchet \
+  --mode floor \
+  --stats /tmp/mutation-stats.json \
+  --baseline contracts/mutation-baseline.json \
+  --package-path src/cscie103_olap_oltp \
+  --package-dotted cscie103_olap_oltp
+"""
+
 [tasks."mutants"]
-description = "Mutation-test the domain modules and list survivors"
+description = "Mutation-test the whole tree and list survivors"
 # NOT IN THE GATE, AND THAT IS A COST DECISION RATHER THAN A JUDGEMENT.
 #
 # A full run is ~4200 mutants at ~11/second: over an hour, because the suite
 # runs once per mutant. Putting that on every commit would train people to
 # bypass the hook, which is how a gate becomes decoration.
 #
-# THE DOCUMENTED POLICY IS "NO NEW SURVIVORS IN PROTECTED MODULES", reviewed
-# deliberately rather than enforced per push. Run it when changing the domain
-# logic; the survivors it lists are the assertions worth writing next.
-run = "uv run mutmut run --max-children 4"
+# NOT IN THE GATE, WHICH IS THE DOCUMENTED SHAPE: scoped runs on a pull request
+# and a full run on a schedule. A full run here is ~2.5 minutes at 8 children --
+# faster than feared, because mutmut only runs the tests covering each mutant --
+# but it is still far too slow for a pre-commit hook.
+#
+# BASELINE: 1538/4049 killed (38%) as of the first honest measurement. The
+# ratchet holds that per file; `mutants:check` is what enforces it.
+run = "uv run mutmut run --max-children 8"
 
 [tasks."contracts:generate"]
 description = "Regenerate the published ODCS data contracts from the pandera models"

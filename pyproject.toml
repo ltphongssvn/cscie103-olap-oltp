@@ -129,6 +129,7 @@ dev = [
   # exist to close. AnalyzerEngine() with no arguments will otherwise DOWNLOAD
   # the large model on first run, ignoring whatever was pinned.
   "en_core_web_sm @ https://github.com/explosion/spacy-models/releases/download/en_core_web_sm-3.8.0/en_core_web_sm-3.8.0-py3-none-any.whl",
+  "pytest-socket>=0.8.1",
 ]
 
 [build-system]
@@ -292,7 +293,24 @@ markers = [
 #                    nobody sees is a test that stopped running.
 # -m not integration the default run is HERMETIC, so it can sit behind a git
 #                    hook. A hook needing credentials is a hook people bypass.
-addopts = ["--strict-markers", "--strict-config", "-ra", "-m", "not integration"]
+# --disable-socket   THE HERMETIC CLAIM, ENFORCED RATHER THAN ASSERTED.
+#
+# "-m not integration" states the intent; it does not hold it. A mutation run
+# proved that twice: a mutant in pii.py changed the spaCy model name, Presidio
+# called `_download_spacy_model_if_needed`, and the interpreter died with
+# `Fatal Python error: Aborted` in the middle of the run.
+#
+# Blocking the socket turns any such reach into a SocketBlockedError naming the
+# test, which is design feedback rather than a crash. Integration tests declare
+# their need with `socket_enabled`; the marker alone no longer implies it.
+addopts = [
+  "--strict-markers",
+  "--strict-config",
+  "-ra",
+  "-m",
+  "not integration",
+  "--disable-socket",
+]
 
 # An xfail that PASSES is a failure. Otherwise a fixed bug leaves its xfail in
 # place forever and the suite reports success for a test asserting nothing.

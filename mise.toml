@@ -554,6 +554,21 @@ run = "uv run python -m cscie103_olap_oltp.git.pr"
 description = "Show merge state and checks for the current branch's PR"
 run = "gh pr view --json number,title,mergeable,mergeStateStatus,statusCheckRollup --jq '{pr:.number,title,mergeable,state:.mergeStateStatus,checks:[.statusCheckRollup[]|{name,conclusion}]}'"
 
+[tasks.commit]
+description = "Stage everything and commit, without the `git add -A` bug"
+# `git add -A` EXITS 1 ON GIT 2.52+ when an ignored directory exists on disk
+# -- and `mutants/` is created by every mutation run. The failure is
+# intermittent, which is the worst kind: it fires only when there are
+# untracked changes for the sweep to pick up.
+#
+# THE HOOKS STILL DO THE REFUSING. start:check rejects a protected branch and
+# the hygiene gate rejects accident-shaped files; duplicating either here
+# would be a second copy of a rule, which is the drift R008 forbids.
+usage = """
+arg "<message>" help="The commit message"
+"""
+run = 'uv run python -m cscie103_olap_oltp.git.commit "${usage_message?}"'
+
 [tasks.sync]
 description = "Return to develop, pull, and remove branches that are safe to remove"
 # STATE-DRIVEN, NOT A PIPELINE. Deleting whatever reports [gone] aborts when a

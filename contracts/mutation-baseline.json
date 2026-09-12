@@ -1,0 +1,157 @@
+{
+  "files": {
+    "src/cscie103_olap_oltp/catalog.py": {
+      "killed": 113,
+      "score": 0.896825,
+      "total": 126
+    },
+    "src/cscie103_olap_oltp/cloud.py": {
+      "killed": 37,
+      "score": 0.264286,
+      "total": 140
+    },
+    "src/cscie103_olap_oltp/contracts/publish.py": {
+      "killed": 74,
+      "score": 0.45122,
+      "total": 164
+    },
+    "src/cscie103_olap_oltp/contracts/schema.py": {
+      "killed": 44,
+      "score": 0.463158,
+      "total": 95
+    },
+    "src/cscie103_olap_oltp/contracts/verdict.py": {
+      "killed": 1,
+      "score": 0.2,
+      "total": 5
+    },
+    "src/cscie103_olap_oltp/databricks.py": {
+      "killed": 13,
+      "score": 0.058824,
+      "total": 221
+    },
+    "src/cscie103_olap_oltp/environment.py": {
+      "killed": 10,
+      "score": 0.096154,
+      "total": 104
+    },
+    "src/cscie103_olap_oltp/gates.py": {
+      "killed": 13,
+      "score": 0.158537,
+      "total": 82
+    },
+    "src/cscie103_olap_oltp/git/env.py": {
+      "killed": 32,
+      "score": 0.561404,
+      "total": 57
+    },
+    "src/cscie103_olap_oltp/git/ghcli.py": {
+      "killed": 0,
+      "score": 0.0,
+      "total": 39
+    },
+    "src/cscie103_olap_oltp/git/pr.py": {
+      "killed": 11,
+      "score": 0.036667,
+      "total": 300
+    },
+    "src/cscie103_olap_oltp/git/state.py": {
+      "killed": 167,
+      "score": 0.802885,
+      "total": 208
+    },
+    "src/cscie103_olap_oltp/git/sync.py": {
+      "killed": 51,
+      "score": 0.515152,
+      "total": 99
+    },
+    "src/cscie103_olap_oltp/git/worktree.py": {
+      "killed": 78,
+      "score": 0.170678,
+      "total": 457
+    },
+    "src/cscie103_olap_oltp/hygiene.py": {
+      "killed": 26,
+      "score": 0.282609,
+      "total": 92
+    },
+    "src/cscie103_olap_oltp/identity.py": {
+      "killed": 1,
+      "score": 0.002882,
+      "total": 347
+    },
+    "src/cscie103_olap_oltp/ledger.py": {
+      "killed": 203,
+      "score": 1.0,
+      "total": 203
+    },
+    "src/cscie103_olap_oltp/olap/ddl.py": {
+      "killed": 81,
+      "score": 1.0,
+      "total": 81
+    },
+    "src/cscie103_olap_oltp/olap/lineage.py": {
+      "killed": 0,
+      "score": 0.0,
+      "total": 14
+    },
+    "src/cscie103_olap_oltp/olap/warehouse.py": {
+      "killed": 0,
+      "score": 0.0,
+      "total": 128
+    },
+    "src/cscie103_olap_oltp/oltp/load.py": {
+      "killed": 0,
+      "score": 0.0,
+      "total": 53
+    },
+    "src/cscie103_olap_oltp/oltp/seed.py": {
+      "killed": 19,
+      "score": 1.0,
+      "total": 19
+    },
+    "src/cscie103_olap_oltp/oltp/tables.py": {
+      "killed": 0,
+      "score": 0.0,
+      "total": 37
+    },
+    "src/cscie103_olap_oltp/pii.py": {
+      "killed": 37,
+      "score": 0.274074,
+      "total": 135
+    },
+    "src/cscie103_olap_oltp/policy/__main__.py": {
+      "killed": 21,
+      "score": 0.35,
+      "total": 60
+    },
+    "src/cscie103_olap_oltp/policy/check_ruleset.py": {
+      "killed": 0,
+      "score": 0.0,
+      "total": 49
+    },
+    "src/cscie103_olap_oltp/policy/evaluate.py": {
+      "killed": 89,
+      "score": 0.654412,
+      "total": 136
+    },
+    "src/cscie103_olap_oltp/policy/ruleset.py": {
+      "killed": 112,
+      "score": 0.658824,
+      "total": 170
+    },
+    "src/cscie103_olap_oltp/policy/snapshot.py": {
+      "killed": 237,
+      "score": 0.658333,
+      "total": 360
+    },
+    "src/cscie103_olap_oltp/remediation.py": {
+      "killed": 68,
+      "score": 1.0,
+      "total": 68
+    }
+  },
+  "floor": 0.7,
+  "tolerance_fraction": 0.02,
+  "tolerance_mutants": 3
+}

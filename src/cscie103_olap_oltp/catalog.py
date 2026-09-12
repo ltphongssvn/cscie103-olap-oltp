@@ -53,6 +53,19 @@ COMMENT = "OLTP-to-OLAP demonstration platform."
 # one legal value, the allow-list is trivially correct.
 OWNED = frozenset({CATALOG_NAME})
 
+# THE REFUSAL WHEN NO WAREHOUSE EXISTS, AS ONE VALUE.
+#
+# Written as adjacent literals inside the raise, each fragment was separately
+# mutable and none could be killed without pinning the wording word for word --
+# which freezes prose that ought to stay free to improve. As a named constant a
+# test asserts the FACTS it carries: what needs a warehouse, and what to
+# provision.
+NO_WAREHOUSE = (
+    "no SQL warehouse exists in this workspace.\n"
+    "The catalog is created through the Statement Execution API, which needs"
+    " one. Free Edition provisions a Serverless Starter Warehouse."
+)
+
 
 def create_statement(name: str) -> str:
     """The SQL that creates the catalog, or a refusal.
@@ -104,11 +117,7 @@ def warehouse_id() -> str:
     """
     warehouses = _cli("warehouses", "list", "--output", "json")
     if not warehouses:
-        raise RuntimeError(
-            "no SQL warehouse exists in this workspace.\n"
-            "The catalog is created through the Statement Execution API, which "
-            "needs one. Free Edition provisions a Serverless Starter Warehouse."
-        )
+        raise RuntimeError(NO_WAREHOUSE)
     identifier: str = warehouses[0]["id"]
     return identifier
 
@@ -160,23 +169,14 @@ def reconcile() -> bool:
         print(f"ok      catalog {CATALOG_NAME}")
         return True
 
-    response = _cli(
-        "api",
-        "post",
-        "/api/2.0/sql/statements",
-        "--json",
-        json.dumps(
-            {
-                "warehouse_id": warehouse_id(),
-                "statement": create_statement(CATALOG_NAME),
-                "wait_timeout": "50s",
-            }
-        ),
-    )
-
-    state = response.get("status", {}).get("state")
-    if state != "SUCCEEDED":
-        raise RuntimeError(f"catalog creation did not succeed: {response.get('status')}")
+    # THE SHARED EXECUTOR, NOT A SECOND COPY OF THE REQUEST.
+    #
+    # This rebuilt by hand what execute() already builds: the endpoint, the
+    # warehouse lookup, the wait_timeout and the state check, written twice.
+    # Mutation testing found the duplicate by corrupting a key name in one copy
+    # while the other stayed correct -- the drift this repository gates
+    # everywhere else, sitting inside the bootstrap.
+    execute(create_statement(CATALOG_NAME))
 
     print(f"created catalog {CATALOG_NAME}")
     return True

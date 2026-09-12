@@ -35,7 +35,7 @@ import pandera.pandas as pa
 from cscie103_olap_oltp.catalog import execute
 from cscie103_olap_oltp.oltp.contracts import TABLES
 
-__all__ = ["SQL_TYPES", "ddl_for", "main"]
+__all__ = ["SQL_TYPES", "TABLE_FOOTER", "UNMAPPED_DTYPE", "USAGE", "ddl_for", "main"]
 
 # PANDERA DTYPES TO UNITY CATALOG TYPES, declared as a table so an unmapped
 # dtype fails at the lookup rather than silently becoming STRING.
@@ -55,6 +55,22 @@ SQL_TYPES = {
 # changes and handle late arrivals.
 SEQUENCE_COLUMN = "updated_at"
 
+# THE MESSAGES, AS TEMPLATES RATHER THAN ADJACENT LITERALS.
+#
+# Inline, each fragment was separately mutable: three mutants corrupted
+# mid-sentence text that no test could kill without pinning the wording word
+# for word, which freezes prose that ought to stay free to improve.
+UNMAPPED_DTYPE = (
+    "no SQL type mapped for pandera dtype {dtype!r} (column {column!r}); add it to SQL_TYPES"
+)
+
+# THE TABLE FOOTER. One literal, so the CDC property cannot be corrupted
+# piecemeal -- and a table created without it makes the pipeline read an empty
+# change feed and report success.
+TABLE_FOOTER = "\n)\nTBLPROPERTIES (delta.enableChangeDataFeed = true)"
+
+USAGE = "usage: python -m cscie103_olap_oltp.oltp.tables <catalog.schema>"
+
 
 def ddl_for(name: str, schema: pa.DataFrameSchema, target: str) -> str:
     """One CREATE TABLE, rendered from the contract.
@@ -67,26 +83,19 @@ def ddl_for(name: str, schema: pa.DataFrameSchema, target: str) -> str:
     for column, spec in schema.columns.items():
         dtype = str(spec.dtype)
         if dtype not in SQL_TYPES:
-            raise SystemExit(
-                f"no SQL type mapped for pandera dtype {dtype!r} (column {column!r}); "
-                "add it to SQL_TYPES"
-            )
+            raise SystemExit(UNMAPPED_DTYPE.format(dtype=dtype, column=column))
 
         nullable = "" if spec.nullable else " NOT NULL"
         columns.append(f"  {column} {SQL_TYPES[dtype]}{nullable}")
 
     columns.append(f"  {SEQUENCE_COLUMN} TIMESTAMP NOT NULL")
 
-    return (
-        f"CREATE TABLE IF NOT EXISTS {target}.{name} (\n"
-        + ",\n".join(columns)
-        + "\n)\nTBLPROPERTIES (delta.enableChangeDataFeed = true)"
-    )
+    return f"CREATE TABLE IF NOT EXISTS {target}.{name} (\n" + ",\n".join(columns) + TABLE_FOOTER
 
 
 def main() -> int:
     if len(sys.argv) != 2:
-        raise SystemExit("usage: python -m cscie103_olap_oltp.oltp.tables <catalog.schema>")
+        raise SystemExit(USAGE)
 
     target = sys.argv[1]
 

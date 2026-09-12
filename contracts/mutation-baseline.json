@@ -40,6 +40,11 @@
       "score": 0.158537,
       "total": 82
     },
+    "src/cscie103_olap_oltp/git/commit.py": {
+      "killed": 13,
+      "score": 0.19403,
+      "total": 67
+    },
     "src/cscie103_olap_oltp/git/env.py": {
       "killed": 32,
       "score": 0.561404,
@@ -91,9 +96,9 @@
       "total": 81
     },
     "src/cscie103_olap_oltp/olap/lineage.py": {
-      "killed": 0,
-      "score": 0.0,
-      "total": 14
+      "killed": 8,
+      "score": 1.0,
+      "total": 8
     },
     "src/cscie103_olap_oltp/olap/warehouse.py": {
       "killed": 0,
@@ -101,9 +106,9 @@
       "total": 128
     },
     "src/cscie103_olap_oltp/oltp/load.py": {
-      "killed": 0,
-      "score": 0.0,
-      "total": 53
+      "killed": 69,
+      "score": 0.884615,
+      "total": 78
     },
     "src/cscie103_olap_oltp/oltp/seed.py": {
       "killed": 19,
@@ -111,9 +116,9 @@
       "total": 19
     },
     "src/cscie103_olap_oltp/oltp/tables.py": {
-      "killed": 0,
-      "score": 0.0,
-      "total": 37
+      "killed": 33,
+      "score": 1.0,
+      "total": 33
     },
     "src/cscie103_olap_oltp/pii.py": {
       "killed": 37,

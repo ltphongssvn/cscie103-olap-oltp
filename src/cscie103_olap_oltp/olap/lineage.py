@@ -22,7 +22,13 @@ from __future__ import annotations
 
 from cscie103_olap_oltp.olap.warehouse import olap_schema, query
 
-__all__ = ["LINEAGE_TABLE", "OLAP_TABLES", "OLTP_TABLES", "upstream_of"]
+__all__ = [
+    "LINEAGE_TABLE",
+    "OLAP_TABLES",
+    "OLTP_TABLES",
+    "UPSTREAM_QUERY",
+    "upstream_of",
+]
 
 # THE SYSTEM TABLE, NOT THE REST API. Both expose the same capture; SQL is what
 # this project already speaks, and the API returns only DIRECT parents and
@@ -37,6 +43,27 @@ OLAP_TABLES = ("dim_customer", "dim_product", "fact_order_line")
 # A warehouse feeding a source is the edge that turns a batch into a loop.
 OLTP_TABLES = ("category", "customer", "order", "order_line", "product")
 
+# THE QUERY, AS ONE VALUE RATHER THAN THREE ADJACENT LITERALS.
+#
+# Written inline it was three separately mutable fragments, and mutants
+# corrupted the WHERE and the NULL filter without any test noticing -- each
+# clause looked intact in the fragment the test happened to assert.
+#
+# DISTINCT, BECAUSE THE RAW TABLE IS AN EVENT LOG: one row per read or write,
+# so an hourly pipeline repeats the same edge hundreds of times.
+#
+# IS NOT NULL, BECAUSE A WRITE WITH NO SOURCE IS NOT AN EDGE -- an INSERT of
+# literal values records a target and no parent.
+UPSTREAM_QUERY = (
+    # S608 SUPPRESSED NARROWLY: the only interpolation is LINEAGE_TABLE, a
+    # module constant naming a platform system table. The one value that varies
+    # -- the target -- is a PARAMETER MARKER, which is the whole point.
+    "SELECT DISTINCT source_table_full_name AS source"  # noqa: S608
+    f" FROM {LINEAGE_TABLE}"
+    " WHERE target_table_full_name = :target"
+    " AND source_table_full_name IS NOT NULL"
+)
+
 
 def upstream_of(table: str, schema: str | None = None) -> set[str]:
     """The tables that fed `table`, as recorded by the platform.
@@ -48,11 +75,6 @@ def upstream_of(table: str, schema: str | None = None) -> set[str]:
     source_table_full_name IS NULL FOR WRITES WITH NO SOURCE -- an INSERT of
     literal values, for instance -- and those rows are not edges.
     """
-    rows = query(
-        f"SELECT DISTINCT source_table_full_name AS source FROM {LINEAGE_TABLE} "  # noqa: S608
-        "WHERE target_table_full_name = :target "
-        "AND source_table_full_name IS NOT NULL",
-        target=f"{schema or olap_schema()}.{table}",
-    )
+    rows = query(UPSTREAM_QUERY, target=f"{schema or olap_schema()}.{table}")
 
     return {row["source"] for row in rows}
